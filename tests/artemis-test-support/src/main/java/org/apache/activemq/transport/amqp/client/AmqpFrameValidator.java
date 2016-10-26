@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License.  You may obtain a copy of the License at
  *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,6 +15,8 @@
  * limitations under the License.
  */
 package org.apache.activemq.transport.amqp.client;
+
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 
 import org.apache.qpid.proton.amqp.Binary;
 import org.apache.qpid.proton.amqp.transport.Attach;
@@ -33,8 +35,10 @@ import org.apache.qpid.proton.amqp.transport.Transfer;
  */
 public class AmqpFrameValidator {
 
-   private boolean valid = true;
-   private String errorMessage;
+   //no need to create an instance of AtomicReference for each AmqpFrameValidator instance -> makes it suitable to be used not only in validation tests
+   private static final AtomicReferenceFieldUpdater<AmqpFrameValidator, String> ERROR_MESSAGE_UPDATER = AtomicReferenceFieldUpdater.newUpdater(AmqpFrameValidator.class, String.class, "errorMessage");
+
+   private volatile String errorMessage = null;
 
    public void inspectOpen(Open open, Binary encoded) {
 
@@ -73,31 +77,34 @@ public class AmqpFrameValidator {
    }
 
    public boolean isValid() {
-      return valid;
+      return ERROR_MESSAGE_UPDATER.get(this) != null;
    }
 
-   protected void setValid(boolean valid) {
-      this.valid = valid;
+   public final void clearErrorMessage() {
+      ERROR_MESSAGE_UPDATER.set(this, null);
    }
 
-   public String getErrorMessage() {
-      return errorMessage;
+   public final String getErrorMessage() {
+      return ERROR_MESSAGE_UPDATER.get(this);
    }
 
-   protected void setErrorMessage(String errorMessage) {
-      this.errorMessage = errorMessage;
-   }
-
-   protected void markAsInvalid(String errorMessage) {
-      if (valid) {
-         setValid(false);
-         setErrorMessage(errorMessage);
+   protected final boolean markAsInvalid(String errorMessage) {
+      if (errorMessage == null) {
+         throw new NullPointerException("errorMessage can't be null!");
+      }
+      //volatile load is very cheap on x86
+      if (ERROR_MESSAGE_UPDATER.get(this) == null) {
+         return ERROR_MESSAGE_UPDATER.compareAndSet(this, null, errorMessage);
+      }
+      else {
+         return false;
       }
    }
 
-   public void assertValid() {
-      if (!isValid()) {
-         throw new AssertionError(errorMessage);
+   public final void assertValid() {
+      final String assertionErrorMessage = ERROR_MESSAGE_UPDATER.get(this);
+      if (assertionErrorMessage != null) {
+         throw new AssertionError(assertionErrorMessage);
       }
    }
 }

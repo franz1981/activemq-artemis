@@ -18,7 +18,6 @@
 package org.apache.activemq.transport.amqp.client;
 
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
