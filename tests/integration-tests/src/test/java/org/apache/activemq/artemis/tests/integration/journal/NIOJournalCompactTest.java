@@ -72,6 +72,9 @@ public class NIOJournalCompactTest extends JournalImplTestBase {
 
    @Test
    public void testControlFile() throws Exception {
+      fileSize = 10 * 1024 * 1024;
+      resetFileFactory();
+
       ArrayList<JournalFile> dataFiles = new ArrayList<>();
 
       for (int i = 0; i < 5; i++) {

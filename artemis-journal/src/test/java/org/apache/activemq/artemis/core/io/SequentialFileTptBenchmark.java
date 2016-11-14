@@ -29,6 +29,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.aio.AIOSequentialFileFactory;
 import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
+import org.apache.activemq.artemis.core.io.mapped.batch.BatchWriteBuffer;
 import org.apache.activemq.artemis.core.io.nio.NIOSequentialFileFactory;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.jlibaio.LibaioContext;
@@ -47,7 +48,7 @@ public class SequentialFileTptBenchmark {
       final int tests = 10;
       final int warmup = 20_000;
       final int measurements = 20_000;
-      final int msgSize = 100;
+      final int msgSize = 1000;
       final byte[] msgContent = new byte[msgSize];
       Arrays.fill(msgContent, (byte) 1);
       final File tmpDirectory = new File("./");
@@ -56,10 +57,8 @@ public class SequentialFileTptBenchmark {
       switch (type) {
 
          case Mapped:
-            final MappedSequentialFileFactory mappedFactory = new MappedSequentialFileFactory(tmpDirectory, null, true);
-            final int alignedMessageSize = mappedFactory.calculateBlockSize(msgSize);
-            final int totalFileSize = Math.max(alignedMessageSize * measurements, alignedMessageSize * warmup);
-            factory = mappedFactory.chunkBytes(totalFileSize).overlapBytes(0).setDatasync(dataSync);
+            final int totalFileSize = Math.max(msgSize * measurements, msgSize * warmup);
+            factory = new MappedSequentialFileFactory(tmpDirectory, totalFileSize, null, true, dataSync ? new BatchWriteBuffer(ArtemisConstants.DEFAULT_JOURNAL_BUFFER_SIZE_AIO, ArtemisConstants.DEFAULT_JOURNAL_BUFFER_TIMEOUT_AIO) : null).setDatasync(dataSync);
             break;
          case Nio:
             factory = new NIOSequentialFileFactory(tmpDirectory, true, ArtemisConstants.DEFAULT_JOURNAL_BUFFER_SIZE_NIO, ArtemisConstants.DEFAULT_JOURNAL_BUFFER_TIMEOUT_NIO, 1, false, null).setDatasync(dataSync);
@@ -75,6 +74,7 @@ public class SequentialFileTptBenchmark {
             throw new AssertionError("unsupported case");
       }
       factory.start();
+
       try {
          final EncodingSupport encodingSupport = new EncodingSupport() {
             @Override
@@ -102,18 +102,13 @@ public class SequentialFileTptBenchmark {
          final SequentialFile sequentialFile = factory.createSequentialFile("seq.dat");
          sequentialFile.getJavaFile().delete();
          sequentialFile.getJavaFile().deleteOnExit();
-         sequentialFile.open();
-         final long startZeros = System.nanoTime();
-         sequentialFile.fill(fileSize);
-         final long elapsedZeros = System.nanoTime() - startZeros;
-         System.out.println("Zeroed " + fileSize + " bytes in " + TimeUnit.NANOSECONDS.toMicros(elapsedZeros) + " us");
          try {
             {
-               final long elapsed = writeMeasurements(factory, sequentialFile, encodingSupport, warmup, writeSync);
+               final long elapsed = writeMeasurements(factory, sequentialFile, encodingSupport, warmup, fileSize, writeSync);
                System.out.println("warmup:" + (measurements * 1000_000_000L) / elapsed + " ops/sec");
             }
             for (int t = 0; t < tests; t++) {
-               final long elapsed = writeMeasurements(factory, sequentialFile, encodingSupport, measurements, writeSync);
+               final long elapsed = writeMeasurements(factory, sequentialFile, encodingSupport, measurements, fileSize, writeSync);
                System.out.println((measurements * 1000_000_000L) / elapsed + " ops/sec");
             }
          } finally {
@@ -128,28 +123,41 @@ public class SequentialFileTptBenchmark {
                                          SequentialFile sequentialFile,
                                          EncodingSupport encodingSupport,
                                          int measurements,
+                                         int fileSize,
                                          boolean writeSync) throws Exception {
-      //System.gc();
+      sequentialFile.open();
+      final long startZeros = System.nanoTime();
+      sequentialFile.fill(fileSize);
+      sequentialFile.close();
+      final long elapsedZeros = System.nanoTime() - startZeros;
+      System.out.println("Zeroed " + fileSize + " bytes in " + TimeUnit.NANOSECONDS.toMicros(elapsedZeros) + " us");
+      final CounterIOCallback counterIOCallback = new CounterIOCallback().reset();
       TimeUnit.SECONDS.sleep(2);
-      sequentialFileFactory.activateBuffer(sequentialFile);
+      sequentialFile.open();
       sequentialFile.position(0);
+      sequentialFileFactory.activateBuffer(sequentialFile);
       final long start = System.nanoTime();
       for (int i = 0; i < measurements; i++) {
-         write(sequentialFile, encodingSupport, writeSync);
+         write(sequentialFile, encodingSupport, writeSync, counterIOCallback);
+      }
+      //wait until the last completed
+      while (counterIOCallback.count() != measurements) {
+         LockSupport.parkNanos(1L);
       }
       sequentialFileFactory.deactivateBuffer();
+      sequentialFile.close();
       final long elapsed = System.nanoTime() - start;
       return elapsed;
    }
 
    private static void write(SequentialFile sequentialFile,
                              EncodingSupport encodingSupport,
-                             boolean sync) throws Exception {
+                             boolean sync,
+                             IOCallback callback) throws Exception {
       //this pattern is necessary to ensure that NIO's TimedBuffer fill flush the buffer and know the real size of it
       if (sequentialFile.fits(encodingSupport.getEncodeSize())) {
-         final FastWaitIOCallback ioCallback = CALLBACK.reset();
-         sequentialFile.write(encodingSupport, sync, ioCallback);
-         ioCallback.waitCompletion();
+         //this way a proper implementation could coalesce the flushes
+         sequentialFile.write(encodingSupport, sync, callback);
       } else {
          throw new IllegalStateException("can't happen!");
       }
@@ -159,6 +167,37 @@ public class SequentialFileTptBenchmark {
 
       Mapped, Nio, Aio
 
+   }
+
+   private static final class CounterIOCallback implements IOCallback {
+
+      private final AtomicBoolean publisher = new AtomicBoolean(false);
+      private int count = 0;
+
+      public int count() {
+         //read acquire
+         publisher.get();
+         return count;
+      }
+
+      public CounterIOCallback reset() {
+         count = 0;
+         //write release
+         publisher.lazySet(false);
+         return this;
+      }
+
+      @Override
+      public void done() {
+         count++;
+         //write release
+         publisher.lazySet(true);
+      }
+
+      @Override
+      public void onError(int errorCode, String errorMessage) {
+         throw new IllegalStateException(errorMessage);
+      }
    }
 
    private static final class FastWaitIOCallback implements IOCallback {

@@ -113,6 +113,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
 
    @Test
    public void testParams() throws Exception {
+      fileSize = JournalImpl.MIN_FILE_SIZE - 1;
+      resetFileFactory();
       try {
          new JournalImpl(JournalImpl.MIN_FILE_SIZE - 1, 10, 10, 0, 0, fileFactory, filePrefix, fileExtension, 1);
 
@@ -120,7 +122,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
       } catch (IllegalArgumentException e) {
          // Ok
       }
-
+      fileSize = 10 * 1024;
+      resetFileFactory();
       try {
          new JournalImpl(10 * 1024, 1, 0, 0, 0, fileFactory, filePrefix, fileExtension, 1);
 
@@ -129,6 +132,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
          // Ok
       }
 
+      fileSize = 10 * 1024;
+      resetFileFactory();
       try {
          new JournalImpl(10 * 1024, 10, 0, 0, 0, null, filePrefix, fileExtension, 1);
 
@@ -137,6 +142,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
          // Ok
       }
 
+      fileSize = 10 * 1024;
+      resetFileFactory();
       try {
          new JournalImpl(10 * 1024, 10, 0, 0, 0, fileFactory, null, fileExtension, 1);
 
@@ -145,6 +152,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
          // Ok
       }
 
+      fileSize = 10 * 1024;
+      resetFileFactory();
       try {
          new JournalImpl(10 * 1024, 10, 0, 0, 0, fileFactory, filePrefix, null, 1);
 
@@ -153,6 +162,8 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
          // Ok
       }
 
+      fileSize = 10 * 1024;
+      resetFileFactory();
       try {
          new JournalImpl(10 * 1024, 10, 0, 0, 0, fileFactory, filePrefix, null, 0);
 
@@ -412,7 +423,7 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
 
       stopJournal();
 
-      setup(5, 10 * 1024, true);
+      setup(5, 10 * 1024, true, false);
       createJournal();
       startJournal();
       load();
@@ -646,14 +657,21 @@ public abstract class JournalImplTestUnit extends JournalImplTestBase {
    // Validate the methods that are used on assertions
    @Test
    public void testCalculations() throws Exception {
-
+      this.fileSize = 10 * 1024;
+      resetFileFactory();
       Assert.assertEquals(0, calculateNumberOfFiles(journal, 10 * 1024, 1, 1, 10, 2, 20));
       Assert.assertEquals(0, calculateNumberOfFiles(journal, 10 * 1024, 512, 1, 1));
       Assert.assertEquals(0, calculateNumberOfFiles(journal, 10 * 1024, 512, 19, 10));
       Assert.assertEquals(1, calculateNumberOfFiles(journal, 10 * 1024, 512, 20, 10));
+      this.fileSize = 3000;
+      resetFileFactory();
       Assert.assertEquals(0, calculateNumberOfFiles(journal, 3000, 500, 2, 1000, 1, 500));
       Assert.assertEquals(1, calculateNumberOfFiles(journal, 3000, 500, 2, 1000, 1, 1000));
+      this.fileSize = 10240;
+      resetFileFactory();
       Assert.assertEquals(9, calculateNumberOfFiles(journal, 10240, 1, 90, 1038, 45, 10));
+      this.fileSize = 10 * 1024;
+      resetFileFactory();
       Assert.assertEquals(11, calculateNumberOfFiles(journal, 10 * 1024, 512, 60, 14 + 1024, 30, 14));
    }
 

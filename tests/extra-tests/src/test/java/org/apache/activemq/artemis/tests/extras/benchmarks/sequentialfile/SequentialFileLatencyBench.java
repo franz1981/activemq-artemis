@@ -44,8 +44,6 @@ public final class SequentialFileLatencyBench implements JLBHTask {
    private static final int WARMUP_ITERATIONS = 20_000;
    private static final int TARGET_THROUGHPUT = 500_000;
    private static final int TESTS = 5;
-   private static int CHUNK_BYTES = 4096 * 1024 * 16;
-   private static int OVERLAP_BYTES = CHUNK_BYTES / 4;
    private final SequentialFileFactory sequentialFileFactory;
    private SequentialFile sequentialFile;
    private ByteBuffer message;
@@ -68,11 +66,15 @@ public final class SequentialFileLatencyBench implements JLBHTask {
       final int bufferTimeout = 0;
       final int maxIO = -1;
       final boolean logRates = false;
+      final long fileSize = (WARMUP_ITERATIONS + (ITERATIONS * TESTS)) * JOURNAL_RECORD_SIZE;
+      if (fileSize > Integer.MAX_VALUE) {
+         throw new IllegalStateException("UNSUPPORTED FILE SIZE!");
+      }
       final IOCriticalErrorListener criticalErrorListener = null;
       final SequentialFileFactory sequentialFileFactory;
       switch (JOURNAL_TYPE) {
          case MAPPED:
-            sequentialFileFactory = new MappedSequentialFileFactory(journalDir).chunkBytes(CHUNK_BYTES).overlapBytes(OVERLAP_BYTES);
+            sequentialFileFactory = new MappedSequentialFileFactory(journalDir, (int) fileSize);
             break;
          case NIO:
             sequentialFileFactory = new NIOSequentialFileFactory(journalDir, buffered, bufferSize, bufferTimeout, maxIO, logRates, criticalErrorListener);
@@ -122,7 +124,6 @@ public final class SequentialFileLatencyBench implements JLBHTask {
    }
 
    private enum JournalType {
-      MAPPED,
-      NIO
+      MAPPED, NIO
    }
 }

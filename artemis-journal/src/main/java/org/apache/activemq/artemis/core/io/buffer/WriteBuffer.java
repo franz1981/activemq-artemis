@@ -14,24 +14,25 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.artemis.tests.integration.journal;
+package org.apache.activemq.artemis.core.io.buffer;
 
-import java.io.File;
+import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
+import org.apache.activemq.artemis.core.io.IOCallback;
+import org.apache.activemq.artemis.core.journal.EncodingSupport;
 
-import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
-import org.apache.activemq.artemis.tests.util.ActiveMQTestBase;
+public interface WriteBuffer {
 
-public class MappedJournalCompactTest extends NIOJournalCompactTest {
+   void start();
 
-   @Override
-   protected SequentialFileFactory getFileFactory() throws Exception {
-      File file = new File(getTestDir());
+   void stop();
 
-      ActiveMQTestBase.deleteDirectory(file);
+   void setObserver(TimedBufferObserver observer);
 
-      file.mkdir();
+   boolean checkSize(int sizeChecked);
 
-      return new MappedSequentialFileFactory(getTestDirfile(), this.fileSize);
-   }
+   void addBytes(ActiveMQBuffer bytes, boolean sync, IOCallback callback);
+
+   void addBytes(EncodingSupport bytes, boolean sync, IOCallback callback);
+
+   void flush();
 }

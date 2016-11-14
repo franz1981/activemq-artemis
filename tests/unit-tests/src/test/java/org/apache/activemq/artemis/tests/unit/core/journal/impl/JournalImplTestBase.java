@@ -81,10 +81,6 @@ public abstract class JournalImplTestBase extends ActiveMQTestBase {
    public void setUp() throws Exception {
       super.setUp();
 
-      resetFileFactory();
-
-      fileFactory.start();
-
       transactions.clear();
 
       records.clear();
@@ -106,11 +102,12 @@ public abstract class JournalImplTestBase extends ActiveMQTestBase {
       super.tearDown();
    }
 
-   protected void resetFileFactory() throws Exception {
+   protected final void resetFileFactory() throws Exception {
       if (fileFactory != null) {
          fileFactory.stop();
       }
       fileFactory = getFileFactory();
+      fileFactory.start();
    }
 
    protected void checkAndReclaimFiles() throws Exception {
@@ -133,6 +130,11 @@ public abstract class JournalImplTestBase extends ActiveMQTestBase {
       this.fileSize = fileSize;
       this.sync = sync;
       this.maxAIO = maxAIO;
+      try {
+         resetFileFactory();
+      } catch (Exception e) {
+         e.printStackTrace();
+      }
    }
 
    protected void setup(final int minFreeFiles,
@@ -145,14 +147,30 @@ public abstract class JournalImplTestBase extends ActiveMQTestBase {
       this.fileSize = fileSize;
       this.sync = sync;
       this.maxAIO = maxAIO;
+      try {
+         resetFileFactory();
+      } catch (Exception e) {
+         e.printStackTrace();
+      }
    }
 
    protected void setup(final int minFreeFiles, final int fileSize, final boolean sync) {
+      setup(minFreeFiles, fileSize, sync, true);
+   }
+
+   protected void setup(final int minFreeFiles, final int fileSize, final boolean sync, boolean resetFactory) {
       minFiles = minFreeFiles;
       poolSize = minFreeFiles;
       this.fileSize = fileSize;
       this.sync = sync;
       maxAIO = 50;
+      if (resetFactory) {
+         try {
+            resetFileFactory();
+         } catch (Exception e) {
+            e.printStackTrace();
+         }
+      }
    }
 
    public void createJournal() throws Exception {

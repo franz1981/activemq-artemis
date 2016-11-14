@@ -30,7 +30,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
 import org.jboss.logging.Logger;
@@ -372,7 +372,7 @@ public class JDBCSequentialFile implements SequentialFile {
 
    // Only Used by Journal, no need to implement.
    @Override
-   public void setTimedBuffer(TimedBuffer buffer) {
+   public void setTimedBuffer(WriteBuffer buffer) {
    }
 
    // Only Used by replication, no need to implement.

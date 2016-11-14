@@ -23,16 +23,6 @@ import org.apache.activemq.artemis.core.io.IOCallback;
 
 public interface TimedBufferObserver {
 
-   // Constants -----------------------------------------------------
-
-   // Attributes ----------------------------------------------------
-
-   // Static --------------------------------------------------------
-
-   // Constructors --------------------------------------------------
-
-   // Public --------------------------------------------------------
-
    void flushBuffer(ByteBuffer buffer, boolean syncRequested, List<IOCallback> callbacks);
 
    /**
@@ -41,13 +31,5 @@ public interface TimedBufferObserver {
    int getRemainingBytes();
 
    ByteBuffer newBuffer(int size, int limit);
-
-   // Package protected ---------------------------------------------
-
-   // Protected -----------------------------------------------------
-
-   // Private -------------------------------------------------------
-
-   // Inner classes -------------------------------------------------
 
 }

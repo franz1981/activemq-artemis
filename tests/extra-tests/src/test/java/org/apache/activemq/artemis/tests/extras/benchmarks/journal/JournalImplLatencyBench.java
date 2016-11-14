@@ -44,8 +44,6 @@ public class JournalImplLatencyBench implements JLBHTask {
    private static final int TESTS = 5;
    private static int TOTAL_MESSAGES = (ITERATIONS * TESTS + WARMUP_ITERATIONS);
    private static int ENCODED_SIZE = 8;
-   private static int CHUNK_BYTES = FILE_SIZE;
-   private static int OVERLAP_BYTES = CHUNK_BYTES / 4;
    private final SequentialFileFactory sequentialFileFactory;
    private Journal journal;
    private EncodingSupport encodingSupport;
@@ -68,7 +66,7 @@ public class JournalImplLatencyBench implements JLBHTask {
       final SequentialFileFactory sequentialFileFactory;
       switch (JOURNAL_TYPE) {
          case MAPPED:
-            sequentialFileFactory = new MappedSequentialFileFactory(journalDir, criticalErrorListener).chunkBytes(CHUNK_BYTES).overlapBytes(OVERLAP_BYTES);
+            sequentialFileFactory = new MappedSequentialFileFactory(journalDir, FILE_SIZE, criticalErrorListener);
             break;
          case NIO:
             sequentialFileFactory = new NIOSequentialFileFactory(journalDir, buffered, bufferSize, bufferTimeout, maxIO, logRates, criticalErrorListener);
@@ -124,8 +122,7 @@ public class JournalImplLatencyBench implements JLBHTask {
    }
 
    private enum JournalType {
-      MAPPED,
-      NIO
+      MAPPED, NIO
    }
 
    private enum NilEncodingSupport implements EncodingSupport {

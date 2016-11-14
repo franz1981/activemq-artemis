@@ -34,7 +34,7 @@ import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 
-public final class TimedBuffer {
+public final class TimedBuffer implements WriteBuffer {
    // Constants -----------------------------------------------------
 
    // Attributes ----------------------------------------------------
@@ -111,6 +111,7 @@ public final class TimedBuffer {
       this.timeout = timeout;
    }
 
+   @Override
    public synchronized void start() {
       if (started) {
          return;
@@ -138,6 +139,7 @@ public final class TimedBuffer {
       started = true;
    }
 
+   @Override
    public void stop() {
       if (!started) {
          return;
@@ -166,6 +168,7 @@ public final class TimedBuffer {
       started = false;
    }
 
+   @Override
    public synchronized void setObserver(final TimedBufferObserver observer) {
       if (bufferObserver != null) {
          flush();
@@ -179,6 +182,7 @@ public final class TimedBuffer {
     *
     * @param sizeChecked
     */
+   @Override
    public synchronized boolean checkSize(final int sizeChecked) {
       if (!started) {
          throw new IllegalStateException("TimedBuffer is not started");
@@ -217,6 +221,7 @@ public final class TimedBuffer {
       }
    }
 
+   @Override
    public synchronized void addBytes(final ActiveMQBuffer bytes, final boolean sync, final IOCallback callback) {
       if (!started) {
          throw new IllegalStateException("TimedBuffer is not started");
@@ -242,6 +247,7 @@ public final class TimedBuffer {
       }
    }
 
+   @Override
    public synchronized void addBytes(final EncodingSupport bytes, final boolean sync, final IOCallback callback) {
       if (!started) {
          throw new IllegalStateException("TimedBuffer is not started");
@@ -264,6 +270,7 @@ public final class TimedBuffer {
 
    }
 
+   @Override
    public void flush() {
       flush(false);
    }

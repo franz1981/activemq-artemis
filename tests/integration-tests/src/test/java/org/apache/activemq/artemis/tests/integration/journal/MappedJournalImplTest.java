@@ -32,12 +32,12 @@ public class MappedJournalImplTest extends JournalImplTestUnit {
 
       file.mkdir();
 
-      return new MappedSequentialFileFactory(getTestDirfile());
+      return new MappedSequentialFileFactory(getTestDirfile(), this.fileSize);
    }
 
    @Override
    protected int getAlignment() {
-      return fileFactory.getAlignment();
+      return 1;
    }
 
 }

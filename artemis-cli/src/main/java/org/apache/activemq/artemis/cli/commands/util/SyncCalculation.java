@@ -170,7 +170,10 @@ public class SyncCalculation {
       return timeWait;
    }
 
-   private static SequentialFileFactory newFactory(File datafolder, boolean datasync, JournalType journalType, int fileSize) {
+   private static SequentialFileFactory newFactory(File datafolder,
+                                                   boolean datasync,
+                                                   JournalType journalType,
+                                                   int fileSize) {
       SequentialFileFactory factory;
 
       if (journalType == JournalType.ASYNCIO && !LibaioContext.isLoaded()) {
@@ -190,12 +193,12 @@ public class SyncCalculation {
             ((AIOSequentialFileFactory) factory).disableBufferReuse();
             return factory;
          case MAPPED:
-            factory = new MappedSequentialFileFactory(datafolder, new IOCriticalErrorListener() {
+            factory = new MappedSequentialFileFactory(datafolder, fileSize, new IOCriticalErrorListener() {
                @Override
                public void onIOException(Throwable code, String message, SequentialFile file) {
 
                }
-            }, true).chunkBytes(fileSize).overlapBytes(0).setDatasync(datasync);
+            }, true).setDatasync(datasync);
 
             factory.start();
             return factory;

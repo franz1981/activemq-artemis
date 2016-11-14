@@ -28,63 +28,54 @@ import io.netty.util.internal.PlatformDependent;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.mapped.batch.BatchWriteBuffer;
+import org.apache.activemq.artemis.concurrent.ringbuffer.BytesUtils;
 
 public final class MappedSequentialFileFactory implements SequentialFileFactory {
 
-   private static long DEFAULT_BLOCK_SIZE = 64L << 20;
    private final File directory;
    private final IOCriticalErrorListener criticalErrorListener;
-   private final TimedBuffer timedBuffer;
-   private long chunkBytes;
-   private long overlapBytes;
+   private final BatchWriteBuffer timedBuffer;
+   private final int maxIO;
+   private final int capacity;
    private boolean useDataSync;
    private boolean supportCallbacks;
 
-   protected volatile int alignment = -1;
+   public MappedSequentialFileFactory(File directory,
+                                      int capacity,
+                                      IOCriticalErrorListener criticalErrorListener,
+                                      boolean supportCallbacks,
+                                      BatchWriteBuffer writeBuffer) {
+      this.directory = directory;
+      this.capacity = capacity;
+      this.criticalErrorListener = criticalErrorListener;
+      this.useDataSync = true;
+      this.timedBuffer = writeBuffer;
+      this.supportCallbacks = supportCallbacks;
+      this.maxIO = writeBuffer == null ? 1 : writeBuffer.messageCapacity();
+      if (capacity <= 0) {
+         throw new IllegalStateException("capacity must be > 0!");
+      }
+   }
 
    public MappedSequentialFileFactory(File directory,
+                                      int capacity,
                                       IOCriticalErrorListener criticalErrorListener,
                                       boolean supportCallbacks) {
-      this.directory = directory;
-      this.criticalErrorListener = criticalErrorListener;
-      this.chunkBytes = DEFAULT_BLOCK_SIZE;
-      this.overlapBytes = DEFAULT_BLOCK_SIZE / 4;
-      this.useDataSync = true;
-      this.timedBuffer = null;
-      this.supportCallbacks = supportCallbacks;
+      this(directory, capacity, criticalErrorListener, supportCallbacks, null);
    }
 
-   public MappedSequentialFileFactory(File directory, IOCriticalErrorListener criticalErrorListener) {
-      this(directory, criticalErrorListener, false);
+   public MappedSequentialFileFactory(File directory, int capacity, IOCriticalErrorListener criticalErrorListener) {
+      this(directory, capacity, criticalErrorListener, false);
    }
 
-   public MappedSequentialFileFactory(File directory) {
-      this(directory, null);
-   }
-
-
-   public long chunkBytes() {
-      return chunkBytes;
-   }
-
-   public MappedSequentialFileFactory chunkBytes(long chunkBytes) {
-      this.chunkBytes = chunkBytes;
-      return this;
-   }
-
-   public long overlapBytes() {
-      return overlapBytes;
-   }
-
-   public MappedSequentialFileFactory overlapBytes(long overlapBytes) {
-      this.overlapBytes = overlapBytes;
-      return this;
+   public MappedSequentialFileFactory(File directory, int capacity) {
+      this(directory, capacity, null);
    }
 
    @Override
    public SequentialFile createSequentialFile(String fileName) {
-      final MappedSequentialFile mappedSequentialFile = new MappedSequentialFile(this, directory, new File(directory, fileName), chunkBytes, overlapBytes, criticalErrorListener);
+      final MappedSequentialFile mappedSequentialFile = new MappedSequentialFile(this, directory, new File(directory, fileName), capacity, criticalErrorListener);
       if (this.timedBuffer == null) {
          return mappedSequentialFile;
       } else {
@@ -105,7 +96,7 @@ public final class MappedSequentialFileFactory implements SequentialFileFactory 
 
    @Override
    public int getMaxIO() {
-      return 1;
+      return this.maxIO;
    }
 
    @Override
@@ -162,8 +153,7 @@ public final class MappedSequentialFileFactory implements SequentialFileFactory 
    @Override
    public void deactivateBuffer() {
       if (timedBuffer != null) {
-         // When moving to a new file, we need to make sure any pending buffer will be transferred to the buffer
-         timedBuffer.flush();
+         // Removing the observer force the timed buffer to flush any pending changes
          timedBuffer.setObserver(null);
       }
    }
@@ -179,9 +169,9 @@ public final class MappedSequentialFileFactory implements SequentialFileFactory 
    }
 
    @Override
+   @Deprecated
    public MappedSequentialFileFactory setAlignment(int alignment) {
-      this.alignment = alignment;
-      return this;
+      throw new UnsupportedOperationException();
    }
 
    @Override
@@ -197,7 +187,7 @@ public final class MappedSequentialFileFactory implements SequentialFileFactory 
    @Override
    public void clearBuffer(final ByteBuffer buffer) {
       if (buffer.isDirect()) {
-         BytesUtils.zerosDirect(buffer);
+         BytesUtils.zeros(buffer);
       } else if (buffer.hasArray()) {
          final byte[] array = buffer.array();
          //SIMD OPTIMIZATION

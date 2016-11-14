@@ -354,12 +354,12 @@ public class ValidateTransactionHealthTest extends ActiveMQTestBase {
       } else if (factoryType.equals("nio2")) {
          return new NIOSequentialFileFactory(new File(directory), true, 1);
       } else if (factoryType.equals("mmap")) {
-         return new MappedSequentialFileFactory(new File(directory), new IOCriticalErrorListener() {
+         return new MappedSequentialFileFactory(new File(directory), fileSize, new IOCriticalErrorListener() {
             @Override
             public void onIOException(Throwable code, String message, SequentialFile file) {
                code.printStackTrace();
             }
-         }, true).chunkBytes(fileSize).overlapBytes(0);
+         }, true);
       } else {
          return new NIOSequentialFileFactory(new File(directory), false, 1);
       }

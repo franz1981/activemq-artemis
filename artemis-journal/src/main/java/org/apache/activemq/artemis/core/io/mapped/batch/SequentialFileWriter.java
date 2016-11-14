@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,24 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.artemis.tests.integration.journal;
 
-import java.io.File;
+package org.apache.activemq.artemis.core.io.mapped.batch;
 
-import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
-import org.apache.activemq.artemis.tests.util.ActiveMQTestBase;
+import java.nio.ByteBuffer;
+import java.util.List;
 
-public class MappedJournalCompactTest extends NIOJournalCompactTest {
+import org.apache.activemq.artemis.core.io.IOCallback;
+import org.apache.activemq.artemis.core.io.buffer.TimedBufferObserver;
 
-   @Override
-   protected SequentialFileFactory getFileFactory() throws Exception {
-      File file = new File(getTestDir());
+public interface SequentialFileWriter extends TimedBufferObserver {
 
-      ActiveMQTestBase.deleteDirectory(file);
+   void flushBuffer(ByteBuffer buffer, int index, int length, boolean syncRequested, List<IOCallback> callbacks);
 
-      file.mkdir();
+   default void onDeactivatedTimedBuffer() {
 
-      return new MappedSequentialFileFactory(getTestDirfile(), this.fileSize);
    }
 }

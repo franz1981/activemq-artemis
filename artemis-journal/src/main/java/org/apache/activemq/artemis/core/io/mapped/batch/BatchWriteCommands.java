@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -6,7 +6,7 @@
  * (the "License"); you may not use this file except in compliance with
  * the License. You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,24 +14,18 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.artemis.tests.integration.journal;
 
-import java.io.File;
+package org.apache.activemq.artemis.core.io.mapped.batch;
 
-import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
-import org.apache.activemq.artemis.tests.util.ActiveMQTestBase;
+final class BatchWriteCommands {
 
-public class MappedJournalCompactTest extends NIOJournalCompactTest {
+   public static final int CLOSE_REQUEST_MSG_ID = 1;
+   public static final int WRITE_REQUEST_MSG_ID = 2;
+   public static final int WRITE_AND_FLUSH_REQUEST_MSG_ID = 3;
+   public static final int FLUSH_REQUEST_MSG_ID = 4;
+   public static final int CHANGE_OBSERVER_REQUEST_MSG_ID = 5;
 
-   @Override
-   protected SequentialFileFactory getFileFactory() throws Exception {
-      File file = new File(getTestDir());
+   private BatchWriteCommands() {
 
-      ActiveMQTestBase.deleteDirectory(file);
-
-      file.mkdir();
-
-      return new MappedSequentialFileFactory(getTestDirfile(), this.fileSize);
    }
 }

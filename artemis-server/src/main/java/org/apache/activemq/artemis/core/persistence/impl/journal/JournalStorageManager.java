@@ -45,6 +45,7 @@ import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
 import org.apache.activemq.artemis.core.io.aio.AIOSequentialFileFactory;
 import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
+import org.apache.activemq.artemis.core.io.mapped.batch.BatchWriteBuffer;
 import org.apache.activemq.artemis.core.io.nio.NIOSequentialFileFactory;
 import org.apache.activemq.artemis.core.journal.Journal;
 import org.apache.activemq.artemis.core.journal.impl.JournalFile;
@@ -69,19 +70,12 @@ import org.jboss.logging.Logger;
 public class JournalStorageManager extends AbstractJournalStorageManager {
 
    private static final Logger logger = Logger.getLogger(JournalStorageManager.class);
-
-   private SequentialFileFactory journalFF;
-
-   private SequentialFileFactory bindingsFF;
-
-   SequentialFileFactory largeMessagesFactory;
-
-   private Journal originalMessageJournal;
-
-   private Journal originalBindingsJournal;
-
    protected String largeMessagesDirectory;
-
+   SequentialFileFactory largeMessagesFactory;
+   private SequentialFileFactory journalFF;
+   private SequentialFileFactory bindingsFF;
+   private Journal originalMessageJournal;
+   private Journal originalBindingsJournal;
    private ReplicationManager replicator;
 
    public JournalStorageManager(final Configuration config,
@@ -91,7 +85,9 @@ public class JournalStorageManager extends AbstractJournalStorageManager {
       this(config, executorFactory, scheduledExecutorService, ioExecutors, null);
    }
 
-   public JournalStorageManager(final Configuration config, final ExecutorFactory executorFactory, final ExecutorFactory ioExecutors) {
+   public JournalStorageManager(final Configuration config,
+                                final ExecutorFactory executorFactory,
+                                final ExecutorFactory ioExecutors) {
       this(config, executorFactory, null, ioExecutors, null);
    }
 
@@ -138,7 +134,7 @@ public class JournalStorageManager extends AbstractJournalStorageManager {
          case MAPPED:
             ActiveMQServerLogger.LOGGER.journalUseMAPPED();
             //the mapped version do not need buffering by default
-            journalFF = new MappedSequentialFileFactory(config.getJournalLocation(), criticalErrorListener, true).chunkBytes(config.getJournalFileSize()).overlapBytes(0);
+            journalFF = new MappedSequentialFileFactory(config.getJournalLocation(), config.getJournalFileSize(), criticalErrorListener, true, config.isJournalDatasync() ? new BatchWriteBuffer(config.getJournalBufferSize_AIO(), config.getJournalBufferTimeout_AIO()) : null);
             break;
          default:
             throw ActiveMQMessageBundle.BUNDLE.invalidJournalType2(config.getJournalType());
