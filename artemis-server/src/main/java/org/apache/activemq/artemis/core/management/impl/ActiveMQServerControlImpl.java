@@ -36,6 +36,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -578,27 +579,37 @@ public class ActiveMQServerControlImpl extends AbstractControl implements Active
       }
    }
 
-   @Override
-   public void addRoutingType(String name, String routingTypeName) throws Exception {
-      checkStarted();
+   //TODO add in a proper util classes (maybe RoutingType?)
+   private static final Set<RoutingType> VALID_ROUTING_TYPES = Collections.unmodifiableSet(EnumSet.of(RoutingType.MULTICAST, RoutingType.ANYCAST));
 
-      clearIO();
-      try {
+   private static int parseRoutingTypes(String routingTypes, Collection<? super RoutingType> parsedRoutingTypes) {
+      final String[] routingTypesName = routingTypes.split(",");
+      int parsed = 0;
+      for (String routingTypeName : routingTypesName) {
          final RoutingType routingType = RoutingType.valueOf(routingTypeName);
-         server.addRoutingType(name, routingType);
-      } finally {
-         blockOnIO();
+         if (!VALID_ROUTING_TYPES.contains(routingType)) {
+            throw new IllegalArgumentException(routingTypeName + " is not a valid routing type!");
+         }
+         parsedRoutingTypes.add(routingType);
+         parsed++;
       }
+      return parsed;
    }
 
    @Override
-   public void removeRoutingType(String name, String routingTypeName) throws Exception {
+   public void updateAddress(String name, String routingTypes) throws Exception {
       checkStarted();
 
       clearIO();
       try {
-         final RoutingType routingType = RoutingType.valueOf(routingTypeName);
-         server.removeRoutingType(name, routingType);
+         final Set<RoutingType> updatedRoutingTypes;
+         if (routingTypes != null) {
+            updatedRoutingTypes = new HashSet<>();
+            parseRoutingTypes(routingTypes, updatedRoutingTypes);
+         } else {
+            updatedRoutingTypes = null;
+         }
+         server.updateAddressInfo(name, updatedRoutingTypes);
       } finally {
          blockOnIO();
       }

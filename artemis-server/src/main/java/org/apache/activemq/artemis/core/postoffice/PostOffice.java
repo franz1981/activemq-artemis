@@ -19,6 +19,8 @@ package org.apache.activemq.artemis.core.postoffice;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import org.apache.activemq.artemis.api.core.ActiveMQAddressDoesNotExistException;
 import org.apache.activemq.artemis.api.core.Pair;
@@ -61,9 +63,18 @@ public interface PostOffice extends ActiveMQComponent {
 
    AddressInfo getAddressInfo(SimpleString address);
 
-   void addRoutingType(SimpleString addressName, RoutingType routingType) throws ActiveMQAddressDoesNotExistException;
-
-   void removeRoutingType(SimpleString addressName, RoutingType routingType) throws Exception;
+   /**
+    * Perform an atomic update of the address if it exists.
+    *
+    * @param addressName      the address name
+    * @param updateAddress    a function that given the old address value it requests the new address value to be returned
+    * @param onUpdatedAddress a callback that will be called after a successfully validation of the {@code updateAddress} execution's result
+    * @throws ActiveMQAddressDoesNotExistException if the address doesn't exists
+    * @throws IllegalStateException                if the update involves a remove of {@link RoutingType#MULTICAST} on an address with any queue bindings.
+    */
+   void updateAddressInfo(SimpleString addressName,
+                          BiFunction<? super SimpleString, ? super AddressInfo, ? extends AddressInfo> updateAddress,
+                          Consumer<? super AddressInfo> onUpdatedAddress) throws ActiveMQAddressDoesNotExistException;
 
    List<Queue> listQueuesForAddress(SimpleString address) throws Exception;
 

@@ -18,6 +18,7 @@ package org.apache.activemq.artemis.core.postoffice.impl;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -31,6 +32,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import org.apache.activemq.artemis.api.core.ActiveMQAddressDoesNotExistException;
 import org.apache.activemq.artemis.api.core.ActiveMQAddressFullException;
@@ -456,35 +459,41 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
    }
 
    @Override
-   public void addRoutingType(SimpleString addressName, RoutingType routingType) throws ActiveMQAddressDoesNotExistException {
+   public void updateAddressInfo(SimpleString addressName,
+                                 BiFunction<? super SimpleString, ? super AddressInfo, ? extends AddressInfo> updateAddress,
+                                 Consumer<? super AddressInfo> onUpdatedAddress) throws ActiveMQAddressDoesNotExistException {
       synchronized (addressLock) {
-         final AddressInfo updateAddressInfo = addressManager.updateAddressInfoIfPresent(addressName, (name, addressInfo) -> {
-            addressInfo.getRoutingTypes().add(routingType);
-            return addressInfo;
-         });
-         if (updateAddressInfo == null) {
-            throw ActiveMQMessageBundle.BUNDLE.addressDoesNotExist(addressName);
-         }
-      }
-   }
-
-   @Override
-   public void removeRoutingType(SimpleString addressName, RoutingType routingType) throws Exception {
-      synchronized (addressLock) {
-         if (RoutingType.MULTICAST.equals(routingType)) {
-            final Bindings bindings = addressManager.getBindingsForRoutingAddress(addressName);
-            if (bindings != null) {
-               final boolean existsQueueBindings = bindings.getBindings().stream().anyMatch(QueueBinding.class::isInstance);
-               if (existsQueueBindings) {
-                  throw ActiveMQMessageBundle.BUNDLE.invalidMulticastRoutingTypeDelete();
+         final AddressInfo newAddressInfo = addressManager.updateAddressInfoIfPresent(addressName, (name, oldAddressInfo) -> {
+            final boolean existsMulticast = oldAddressInfo.getRoutingTypes().contains(RoutingType.MULTICAST);
+            //TODO make AddressInfo immutable or create a utility deep copy method
+            //performed defensive copy to stop the update if an exception is thrown
+            final AddressInfo oldAddressInfoCopy = new AddressInfo(name);
+            oldAddressInfoCopy.setId(oldAddressInfo.getId());
+            oldAddressInfoCopy.setRoutingTypes(EnumSet.copyOf(oldAddressInfo.getRoutingTypes()));
+            oldAddressInfoCopy.setAutoCreated(oldAddressInfo.isAutoCreated());
+            final AddressInfo updatedAddressInfo = updateAddress.apply(name, oldAddressInfoCopy);
+            if (existsMulticast) {
+               final boolean removedMulticast = !updatedAddressInfo.getRoutingTypes().contains(RoutingType.MULTICAST);
+               if (removedMulticast) {
+                  final Bindings bindings;
+                  try {
+                     bindings = addressManager.getBindingsForRoutingAddress(addressName);
+                  } catch (Exception e) {
+                     throw new IllegalStateException(e);
+                  }
+                  if (bindings != null) {
+                     final boolean existsQueueBindings = bindings.getBindings().stream().anyMatch(QueueBinding.class::isInstance);
+                     if (existsQueueBindings) {
+                        throw ActiveMQMessageBundle.BUNDLE.invalidMulticastRoutingTypeDelete();
+                     }
+                  }
                }
             }
-         }
-         final AddressInfo updateAddressInfo = addressManager.updateAddressInfoIfPresent(addressName, (name, addressInfo) -> {
-            addressInfo.getRoutingTypes().remove(routingType);
-            return addressInfo;
+            //onUpdatedAddress could modify updatedAddressInfo, but it is an atomic operation
+            onUpdatedAddress.accept(updatedAddressInfo);
+            return updatedAddressInfo;
          });
-         if (updateAddressInfo == null) {
+         if (newAddressInfo == null) {
             throw ActiveMQMessageBundle.BUNDLE.addressDoesNotExist(addressName);
          }
       }

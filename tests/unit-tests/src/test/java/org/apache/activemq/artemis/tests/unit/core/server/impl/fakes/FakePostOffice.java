@@ -19,6 +19,8 @@ package org.apache.activemq.artemis.tests.unit.core.server.impl.fakes;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
 
 import org.apache.activemq.artemis.api.core.ActiveMQAddressDoesNotExistException;
 import org.apache.activemq.artemis.api.core.Pair;
@@ -42,13 +44,9 @@ import org.apache.activemq.artemis.core.transaction.Transaction;
 public class FakePostOffice implements PostOffice {
 
    @Override
-   public void addRoutingType(SimpleString addressName,
-                              RoutingType routingType) throws ActiveMQAddressDoesNotExistException {
-
-   }
-
-   @Override
-   public void removeRoutingType(SimpleString addressName, RoutingType routingType) throws Exception {
+   public void updateAddressInfo(SimpleString addressName,
+                                 BiFunction<? super SimpleString, ? super AddressInfo, ? extends AddressInfo> updateAddress,
+                                 Consumer<? super AddressInfo> onUpdatedAddress) throws ActiveMQAddressDoesNotExistException {
 
    }
 

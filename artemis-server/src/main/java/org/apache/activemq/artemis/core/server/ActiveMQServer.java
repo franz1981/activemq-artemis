@@ -456,23 +456,14 @@ public interface ActiveMQServer extends ActiveMQComponent {
    void removeClientConnection(String clientId);
 
    /**
-    * Add the {@code routingType} from the specified {@code address}.
+    * Update the specified {@code address}.
     *
-    * @param address     the address name
-    * @param routingType the routing type to be added
-    * @throws ActiveMQAddressDoesNotExistException
-    */
-   void addRoutingType(String address, RoutingType routingType) throws ActiveMQAddressDoesNotExistException;
-
-   /**
-    * Remove the {@code routingType} from the specified {@code address}.
-    *
-    * @param address     the address name
-    * @param routingType the routing type to be removed
+    * @param address      the address name
+    * @param routingTypes the updated routing types
     * @throws ActiveMQAddressDoesNotExistException
     * @throws IllegalStateException                when a binding already exists and is requested to remove {@link org.apache.activemq.artemis.core.server.RoutingType#MULTICAST}.
     */
-   void removeRoutingType(String address, RoutingType routingType) throws Exception;
+   void updateAddressInfo(String address, Set<RoutingType> routingTypes) throws ActiveMQAddressDoesNotExistException;
 
    boolean createAddressInfo(AddressInfo addressInfo) throws Exception;
 

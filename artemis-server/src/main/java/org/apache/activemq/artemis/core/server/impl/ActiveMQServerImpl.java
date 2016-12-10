@@ -2401,15 +2401,25 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    }
 
    @Override
-   public void addRoutingType(String address, RoutingType routingType) throws ActiveMQAddressDoesNotExistException {
+   public void updateAddressInfo(String address,
+                                 Set<RoutingType> routingTypes) throws ActiveMQAddressDoesNotExistException {
       final SimpleString addressName = new SimpleString(address);
-      postOffice.addRoutingType(addressName,routingType);
+      this.postOffice.updateAddressInfo(addressName, (name, oldAddressInfo) -> {
+         oldAddressInfo.setRoutingTypes(routingTypes);
+         return oldAddressInfo;
+      }, this::updateAddressBinding);
    }
 
-   @Override
-   public void removeRoutingType(String address, RoutingType routingType) throws Exception {
-      final SimpleString addressName = new SimpleString(address);
-      postOffice.removeRoutingType(addressName,routingType);
+   private void updateAddressBinding(final AddressInfo addressInfo) {
+      final long txID = storageManager.generateID();
+      try {
+         storageManager.deleteAddressBinding(txID, addressInfo.getId());
+         //it modify updatedAddressInfo!
+         storageManager.addAddressBinding(txID, addressInfo);
+         storageManager.commitBindings(txID);
+      } catch (Exception ex) {
+         throw new IllegalStateException(ex);
+      }
    }
 
    @Override
