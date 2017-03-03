@@ -17,10 +17,9 @@
 package org.apache.activemq.artemis.core.remoting.impl.netty;
 
 import java.net.SocketAddress;
-import java.util.Deque;
-import java.util.LinkedList;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Semaphore;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
@@ -31,7 +30,6 @@ import io.netty.channel.EventLoop;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.util.concurrent.GenericFutureListener;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
-import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.core.buffers.impl.ChannelBufferWrapper;
@@ -45,40 +43,30 @@ import org.apache.activemq.artemis.utils.IPV6Util;
 
 public class NettyConnection implements Connection {
 
-   // Constants -----------------------------------------------------
-   private static final int BATCHING_BUFFER_SIZE = 8192;
-
    // Attributes ----------------------------------------------------
 
+   private static final int DEFAULT_BATCH_BYTES = 1460;
    protected final Channel channel;
-
-   private boolean closed;
-
    private final BaseConnectionLifeCycleListener listener;
-
-   private final boolean batchingEnabled;
-
    private final boolean directDeliver;
-
-   private volatile ActiveMQBuffer batchBuffer;
-
    private final Map<String, Object> configuration;
-
-   private final Semaphore writeLock = new Semaphore(1);
-
-   private RemotingConnection protocolConnection;
-
-   private boolean ready = true;
-
    /**
     * if {@link #isWritable(ReadyListener)} returns false, we add a callback
     * here for when the connection (or Netty Channel) becomes available again.
     */
-   private final Deque<ReadyListener> readyListeners = new LinkedList<>();
+   private final List<ReadyListener> readyListeners = new ArrayList<>();
+   private final ThreadLocal<ArrayList<ReadyListener>> localListenersPool = ThreadLocal.withInitial(ArrayList::new);
+   private final boolean batchingEnabled;
+   private final int writeBufferHighWaterMark;
+   private final int writeBatchSize;
 
    // Static --------------------------------------------------------
-
+   private boolean closed;
+   private RemotingConnection protocolConnection;
    // Constructors --------------------------------------------------
+   private boolean ready = true;
+
+   // Public --------------------------------------------------------
 
    public NettyConnection(final Map<String, Object> configuration,
                           final Channel channel,
@@ -91,17 +79,34 @@ public class NettyConnection implements Connection {
 
       this.listener = listener;
 
+      this.directDeliver = directDeliver;
+
       this.batchingEnabled = batchingEnabled;
 
-      this.directDeliver = directDeliver;
+      this.writeBufferHighWaterMark = this.channel.config().getWriteBufferHighWaterMark();
+
+      this.writeBatchSize = batchingEnabled ? Math.min(this.writeBufferHighWaterMark, DEFAULT_BATCH_BYTES) : 0;
    }
 
-   // Public --------------------------------------------------------
+   private static void waitFor(ChannelPromise promise, long millis) {
+      try {
+         final boolean completed = promise.await(millis);
+         if (!completed) {
+            ActiveMQClientLogger.LOGGER.timeoutFlushingPacket();
+         }
+      } catch (InterruptedException e) {
+         throw new ActiveMQInterruptedException(e);
+      }
+   }
+   // Connection implementation ----------------------------
+
+   public final int writeBatchSize() {
+      return this.writeBatchSize;
+   }
 
    public Channel getNettyChannel() {
       return channel;
    }
-   // Connection implementation ----------------------------
 
    @Override
    public void setAutoRead(boolean autoRead) {
@@ -112,7 +117,7 @@ public class NettyConnection implements Connection {
    public boolean isWritable(ReadyListener callback) {
       synchronized (readyListeners) {
          if (!ready) {
-            readyListeners.push(callback);
+            readyListeners.add(callback);
          }
 
          return ready;
@@ -121,34 +126,38 @@ public class NettyConnection implements Connection {
 
    @Override
    public void fireReady(final boolean ready) {
-      LinkedList<ReadyListener> readyToCall = null;
+      final ArrayList<ReadyListener> readyToCall = localListenersPool.get();
       synchronized (readyListeners) {
          this.ready = ready;
 
          if (ready) {
-            for (;;) {
-               ReadyListener readyListener = readyListeners.poll();
-               if (readyListener == null) {
-                  break;
+            final int size = this.readyListeners.size();
+            readyToCall.ensureCapacity(size);
+            try {
+               for (int i = 0; i < size; i++) {
+                  final ReadyListener readyListener = readyListeners.get(i);
+                  if (readyListener == null) {
+                     break;
+                  }
+                  readyToCall.add(readyListener);
                }
-
-               if (readyToCall == null) {
-                  readyToCall = new LinkedList<>();
-               }
-
-               readyToCall.add(readyListener);
+            } finally {
+               readyListeners.clear();
             }
          }
       }
-
-      if (readyToCall != null) {
-         for (ReadyListener readyListener : readyToCall) {
+      try {
+         final int size = readyToCall.size();
+         for (int i = 0; i < size; i++) {
             try {
+               final ReadyListener readyListener = readyToCall.get(i);
                readyListener.readyForWriting();
             } catch (Throwable logOnly) {
                ActiveMQClientLogger.LOGGER.warn(logOnly.getMessage(), logOnly);
             }
          }
+      } finally {
+         readyToCall.clear();
       }
    }
 
@@ -187,19 +196,20 @@ public class NettyConnection implements Connection {
       if (closed) {
          return;
       }
-
-      final SslHandler sslHandler = (SslHandler) channel.pipeline().get("ssl");
+      //to be sure that there won't be any pending writes
+      if (this.batchingEnabled) {
+         this.channel.flush();
+      }
       EventLoop eventLoop = channel.eventLoop();
       boolean inEventLoop = eventLoop.inEventLoop();
       //if we are in an event loop we need to close the channel after the writes have finished
       if (!inEventLoop) {
+         final SslHandler sslHandler = (SslHandler) channel.pipeline().get("ssl");
          closeSSLAndChannel(sslHandler, channel, false);
       } else {
-         eventLoop.execute(new Runnable() {
-            @Override
-            public void run() {
-               closeSSLAndChannel(sslHandler, channel, true);
-            }
+         eventLoop.execute(() -> {
+            final SslHandler sslHandler = (SslHandler) channel.pipeline().get("ssl");
+            closeSSLAndChannel(sslHandler, channel, true);
          });
       }
 
@@ -227,20 +237,8 @@ public class NettyConnection implements Connection {
    // This is called periodically to flush the batch buffer
    @Override
    public void checkFlushBatchBuffer() {
-      if (!batchingEnabled) {
-         return;
-      }
-
-      if (writeLock.tryAcquire()) {
-         try {
-            if (batchBuffer != null && batchBuffer.readable()) {
-               channel.writeAndFlush(batchBuffer.byteBuf());
-
-               batchBuffer = createTransportBuffer(BATCHING_BUFFER_SIZE);
-            }
-         } finally {
-            writeLock.release();
-         }
+      if (this.batchingEnabled) {
+         this.channel.flush();
       }
    }
 
@@ -259,94 +257,48 @@ public class NettyConnection implements Connection {
                      final boolean flush,
                      final boolean batched,
                      final ChannelFutureListener futureListener) {
+      //no need to lock because the Netty's channel is thread-safe
+      //and the order of write is ensured by the order of the write calls
+      final boolean inEventLoop = channel.eventLoop().inEventLoop();
+      final ChannelPromise promise;
+      if ((!inEventLoop && flush) || (futureListener != null)) {
+         promise = channel.newPromise();
+      } else {
+         promise = channel.voidPromise();
+      }
+      final ChannelFuture future;
+      final ByteBuf bytes = buffer.byteBuf();
+      final int readableBytes = bytes.readableBytes();
+      final int writeBatchSize = this.writeBatchSize;
+      if (this.batchingEnabled && batched && !flush && readableBytes < writeBatchSize) {
+         future = writeBatch(bytes, readableBytes, promise);
+      } else {
+         future = channel.writeAndFlush(bytes, promise);
+      }
+      if (futureListener != null) {
+         future.addListener(futureListener);
+      }
+      if (!inEventLoop && flush) {
+         //it is for testing/debugging purposes?
+         waitFor(promise, 10_000);
+      }
+   }
 
-      try {
-         writeLock.acquire();
-
-         try {
-            if (batchBuffer == null && batchingEnabled && batched && !flush) {
-               // Lazily create batch buffer
-
-               batchBuffer = ActiveMQBuffers.dynamicBuffer(BATCHING_BUFFER_SIZE);
-            }
-
-            if (batchBuffer != null) {
-               batchBuffer.writeBytes(buffer, 0, buffer.writerIndex());
-
-               if (batchBuffer.writerIndex() >= BATCHING_BUFFER_SIZE || !batched || flush) {
-                  // If the batch buffer is full or it's flush param or not batched then flush the buffer
-
-                  buffer = batchBuffer;
-               } else {
-                  return;
-               }
-
-               if (!batched || flush) {
-                  batchBuffer = null;
-               } else {
-                  // Create a new buffer
-
-                  batchBuffer = ActiveMQBuffers.dynamicBuffer(BATCHING_BUFFER_SIZE);
-               }
-            }
-
-            // depending on if we need to flush or not we can use a voidPromise or
-            // use a normal promise
-            final ByteBuf buf = buffer.byteBuf();
-            final ChannelPromise promise;
-            if (flush || futureListener != null) {
-               promise = channel.newPromise();
-            } else {
-               promise = channel.voidPromise();
-            }
-
-            EventLoop eventLoop = channel.eventLoop();
-            boolean inEventLoop = eventLoop.inEventLoop();
-            if (!inEventLoop) {
-               if (futureListener != null) {
-                  channel.writeAndFlush(buf, promise).addListener(futureListener);
-               } else {
-                  channel.writeAndFlush(buf, promise);
-               }
-            } else {
-               // create a task which will be picked up by the eventloop and trigger the write.
-               // This is mainly needed as this method is triggered by different threads for the same channel.
-               // if we not do this we may produce out of order writes.
-               final Runnable task = new Runnable() {
-                  @Override
-                  public void run() {
-                     if (futureListener != null) {
-                        channel.writeAndFlush(buf, promise).addListener(futureListener);
-                     } else {
-                        channel.writeAndFlush(buf, promise);
-                     }
-                  }
-               };
-               // execute the task on the eventloop
-               eventLoop.execute(task);
-            }
-
-            // only try to wait if not in the eventloop otherwise we will produce a deadlock
-            if (flush && !inEventLoop) {
-               while (true) {
-                  try {
-                     boolean ok = promise.await(10000);
-
-                     if (!ok) {
-                        ActiveMQClientLogger.LOGGER.timeoutFlushingPacket();
-                     }
-
-                     break;
-                  } catch (InterruptedException e) {
-                     throw new ActiveMQInterruptedException(e);
-                  }
-               }
-            }
-         } finally {
-            writeLock.release();
-         }
-      } catch (InterruptedException e) {
-         throw new ActiveMQInterruptedException(e);
+   private ChannelFuture writeBatch(final ByteBuf bytes, final int readableBytes, final ChannelPromise promise) {
+      final int bytesBeforeUnwritable = (int) channel.bytesBeforeUnwritable();
+      assert bytesBeforeUnwritable >= 0;
+      final int writtenBytes = this.writeBufferHighWaterMark - bytesBeforeUnwritable;
+      final int nextBatchSize = writtenBytes + readableBytes;
+      if (nextBatchSize > writeBatchSize) {
+         //flush before writing to create the chance to make the channel writable again
+         channel.flush();
+         //let netty use its write batching ability
+         return channel.write(bytes, promise);
+      } else if (nextBatchSize == writeBatchSize) {
+         return channel.writeAndFlush(bytes, promise);
+      } else {
+         //let netty use its write batching ability
+         return channel.write(bytes, promise);
       }
    }
 

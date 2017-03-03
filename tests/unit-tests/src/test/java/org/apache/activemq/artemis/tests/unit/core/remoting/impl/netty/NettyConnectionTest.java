@@ -20,6 +20,7 @@ import java.nio.ByteBuffer;
 import java.util.Collections;
 import java.util.Map;
 
+import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -99,5 +100,70 @@ public class NettyConnectionTest extends ActiveMQTestBase {
       public void connectionReadyForWrites(Object connectionID, boolean ready) {
       }
 
+   }
+
+   private static int bytesWaitingToBeFlushed(Channel channel) {
+      return (int) (channel.config().getWriteBufferHighWaterMark() - channel.bytesBeforeUnwritable());
+   }
+
+   @Test
+   public void testOrderedWritesWhileBatching() throws Exception {
+      final int msgSize = Long.BYTES;
+      final ActiveMQBuffer firstMessage = ActiveMQBuffers.wrappedBuffer(ByteBuffer.allocateDirect(msgSize));
+      firstMessage.writeLong(1L);
+      final ActiveMQBuffer secondMessage = ActiveMQBuffers.wrappedBuffer(ByteBuffer.allocateDirect(msgSize));
+      secondMessage.writeLong(2L);
+      final ActiveMQBuffer thirdMessage = ActiveMQBuffers.wrappedBuffer(ByteBuffer.allocateDirect(msgSize));
+      thirdMessage.writeLong(3L);
+      final EmbeddedChannel channel = createChannel();
+      final NettyConnection connection = new NettyConnection(emptyMap, channel, new MyListener(), true, false);
+      Assert.assertTrue(connection.writeBatchSize() >= (msgSize * 3));
+
+      connection.write(firstMessage, false, true);
+      Assert.assertEquals(msgSize * 1, bytesWaitingToBeFlushed(channel));
+      connection.getChannel().eventLoop().submit(() -> {
+         connection.write(secondMessage, false, true);
+      });
+      Assert.assertEquals(msgSize * 1, bytesWaitingToBeFlushed(channel));
+      channel.runPendingTasks();
+      Assert.assertEquals(msgSize * 2, bytesWaitingToBeFlushed(channel));
+      connection.write(thirdMessage, false, true);
+      Assert.assertEquals(msgSize * 3, bytesWaitingToBeFlushed(channel));
+      Assert.assertEquals(0, channel.outboundMessages().size());
+      //the event loop with add the second message to the flush buffer of Netty
+
+      Assert.assertEquals(0, channel.outboundMessages().size());
+      connection.checkFlushBatchBuffer();
+      Assert.assertEquals(0, bytesWaitingToBeFlushed(channel));
+      Assert.assertEquals(3, channel.outboundMessages().size());
+
+      final ByteBuf expectedFirst = channel.readOutbound();
+      Assert.assertEquals(1L, expectedFirst.readLong());
+      final ByteBuf expectedSecond = channel.readOutbound();
+      Assert.assertEquals(2L, expectedSecond.readLong());
+      final ByteBuf expectedThird = channel.readOutbound();
+      Assert.assertEquals(3L, expectedThird.readLong());
+      Assert.assertEquals(0, channel.outboundMessages().size());
+   }
+
+   @Test
+   public void testShouldFlushOverWriteBatchSize() throws Exception {
+      final EmbeddedChannel channel = createChannel();
+      final NettyConnection connection = new NettyConnection(emptyMap, channel, new MyListener(), true, false);
+
+      final ActiveMQBuffer firstMessage = ActiveMQBuffers.wrappedBuffer(ByteBuffer.allocateDirect(connection.writeBatchSize() - 1));
+      firstMessage.setByte(0, (byte) 1);
+      firstMessage.writerIndex(firstMessage.capacity());
+      final ActiveMQBuffer secondMessage = ActiveMQBuffers.wrappedBuffer(ByteBuffer.allocateDirect(1));
+      secondMessage.setByte(0, (byte) 2);
+      secondMessage.writerIndex(secondMessage.capacity());
+
+      Assert.assertTrue(channel.isWritable());
+      connection.write(firstMessage, false, true);
+      Assert.assertTrue(channel.isWritable());
+      Assert.assertEquals(0, channel.outboundMessages().size());
+      connection.write(secondMessage, false, true);
+      Assert.assertTrue(channel.isWritable());
+      Assert.assertEquals(2, channel.outboundMessages().size());
    }
 }
