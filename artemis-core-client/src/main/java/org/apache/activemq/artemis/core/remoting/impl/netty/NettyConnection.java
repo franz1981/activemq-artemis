@@ -20,11 +20,16 @@ import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.LockSupport;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelOutboundBuffer;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.handler.ssl.SslHandler;
@@ -60,12 +65,19 @@ public class NettyConnection implements Connection {
    private final boolean batchingEnabled;
    private final int writeBufferHighWaterMark;
    private final int batchLimit;
+   private final Thread monitorThread;
+   private final LongAdder writtenNotEventLoop;
+   private final AtomicLong writtenEventLoopView;
+   private final AtomicLong eventLoopWaitTimeView;
+   private long eventLoopWaitTime;
+   private long eventLoopSamples;
 
    // Static --------------------------------------------------------
    private boolean closed;
    private RemotingConnection protocolConnection;
    // Constructors --------------------------------------------------
    private boolean ready = true;
+   private long writtenEventLoop;
 
    // Public --------------------------------------------------------
 
@@ -82,11 +94,58 @@ public class NettyConnection implements Connection {
 
       this.directDeliver = directDeliver;
 
-      this.batchingEnabled = batchingEnabled;
+      this.batchingEnabled = true;
 
       this.writeBufferHighWaterMark = this.channel.config().getWriteBufferHighWaterMark();
 
       this.batchLimit = batchingEnabled ? Math.min(this.writeBufferHighWaterMark, DEFAULT_BATCH_BYTES) : 0;
+
+      this.eventLoopWaitTimeView = new AtomicLong(0);
+      this.eventLoopWaitTime = 0;
+      this.eventLoopSamples = 0;
+      this.writtenEventLoopView = new AtomicLong();
+      this.writtenNotEventLoop = new LongAdder();
+      this.writtenEventLoop = 0;
+      this.monitorThread = new Thread(() -> {
+         final String id = channel.id().toString();
+         final long nanoWait = TimeUnit.MILLISECONDS.toNanos(2000L);
+
+         //read acquire the samples
+         long eventLoopWaitTime = this.eventLoopWaitTimeView.get();
+         long eventLoopSamples = this.eventLoopSamples;
+
+         long writtenEventLoop = this.writtenEventLoopView.get();
+         long writtenNotEventLoop = this.writtenNotEventLoop.longValue();
+         long totalWritten = writtenEventLoop + writtenNotEventLoop;
+
+         while (!Thread.currentThread().isInterrupted()) {
+            LockSupport.parkNanos(nanoWait);
+            final ChannelOutboundBuffer channelOutboundBuffer = channel.unsafe().outboundBuffer();
+            if (channelOutboundBuffer != null) {
+               eventLoopWaitTime = this.eventLoopWaitTimeView.get() - eventLoopWaitTime;
+               eventLoopSamples = this.eventLoopSamples - eventLoopSamples;
+               final long avgLoopWaitTime = eventLoopSamples > 0 ? eventLoopWaitTime / eventLoopSamples : -1;
+               final long batchSizeUtilisation = channelOutboundBuffer.totalPendingWriteBytes();
+               final long currentWrittenEventLoop = this.writtenEventLoopView.get();
+               final long currentWrittenNotEventLoop = this.writtenNotEventLoop.longValue();
+
+               final long currentTotalWritten = currentWrittenEventLoop + currentWrittenNotEventLoop;
+
+               final long totalThroughtput = ((currentTotalWritten - totalWritten) * 1000_000L) / nanoWait;
+
+               final long eventLoopThroughput = ((currentWrittenEventLoop - writtenEventLoop) * 1000_000L) / nanoWait;
+               final long notEventLoopThroughput = ((currentWrittenNotEventLoop - writtenNotEventLoop) * 1000_000L) / nanoWait;
+
+               writtenEventLoop = currentWrittenEventLoop;
+               writtenNotEventLoop = currentWrittenNotEventLoop;
+               totalWritten = currentTotalWritten;
+               System.out.println('[' + id + "]\t->\t" + batchSizeUtilisation + "/" + writeBufferHighWaterMark + " bytes\t TOTAL: " + totalThroughtput + " KB/sec\t " + (totalThroughtput > 0 ? ("EVENT_LOOP: [" + (avgLoopWaitTime > 0 ? (avgLoopWaitTime / 1000f) : "N/A") + " us] " + eventLoopThroughput + " KB/sec\tASYNC:" + notEventLoopThroughput + " KB/sec\t ") : ""));
+            }
+         }
+         System.out.println('[' + id + "]\tMONITORING CLOSED");
+      });
+      this.monitorThread.start();
+
    }
 
    private static void waitFor(ChannelPromise promise, long millis) {
@@ -212,6 +271,7 @@ public class NettyConnection implements Connection {
       if (closed) {
          return;
       }
+      monitorThread.interrupt();
       EventLoop eventLoop = channel.eventLoop();
       boolean inEventLoop = eventLoop.inEventLoop();
       //if we are in an event loop we need to close the channel after the writes have finished
@@ -278,8 +338,10 @@ public class NettyConnection implements Connection {
       final EventLoop eventLoop = channel.eventLoop();
       final boolean inEventLoop = eventLoop.inEventLoop();
       if (!inEventLoop) {
+         this.writtenNotEventLoop.add(buffer.readableBytes());
          writeNotInEventLoop(buffer, flush, batched, futureListener);
       } else {
+         final long startRequest = System.nanoTime();
          // OLD COMMENT:
          // create a task which will be picked up by the eventloop and trigger the write.
          // This is mainly needed as this method is triggered by different threads for the same channel.
@@ -290,6 +352,13 @@ public class NettyConnection implements Connection {
          // To solve it, will be necessary to manually perform the count of the current batch instead of rely on the
          // Channel:Config::writeBufferHighWaterMark value.
          eventLoop.execute(() -> {
+            this.eventLoopWaitTime += (System.nanoTime() - startRequest);
+            this.eventLoopSamples++;
+            //write release the event loop samples values
+            this.eventLoopWaitTimeView.lazySet(eventLoopWaitTime);
+            //the real write happens here
+            this.writtenEventLoop += buffer.readableBytes();
+            this.writtenEventLoopView.lazySet(this.writtenEventLoop);
             writeInEventLoop(buffer, flush, batched, futureListener);
          });
       }
