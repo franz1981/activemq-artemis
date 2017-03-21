@@ -685,6 +685,13 @@ public class NettyAcceptor extends AbstractAcceptor {
       }
 
       @Override
+      public final void connectionDestroyed(Object connectionID, boolean connectionInactivity) {
+         if (connections.remove(connectionID) != null) {
+            listener.connectionDestroyed(connectionID, connectionInactivity);
+         }
+      }
+
+      @Override
       public void connectionException(final Object connectionID, final ActiveMQException me) {
          // Execute on different thread to avoid deadlocks
          new Thread() {

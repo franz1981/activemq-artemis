@@ -520,7 +520,6 @@ public class RemotingServiceImpl implements RemotingService, ServerConnectionLif
 
    @Override
    public void connectionDestroyed(final Object connectionID) {
-
       if (logger.isTraceEnabled()) {
          logger.trace("Connection removed " + connectionID + " from server " + this.server, new Exception("trace"));
       }
@@ -530,7 +529,25 @@ public class RemotingServiceImpl implements RemotingService, ServerConnectionLif
       if (conn != null && !conn.connection.isSupportReconnect()) {
          removeConnection(connectionID);
 
-         conn.connection.fail(new ActiveMQRemoteDisconnectException());
+         conn.connection.close();
+      }
+   }
+
+   @Override
+   public final void connectionDestroyed(Object connectionID, boolean connectionInactivity) {
+      if (logger.isTraceEnabled()) {
+         logger.trace("Connection removed " + connectionID + " from server " + this.server, new Exception("trace"));
+      }
+
+      ConnectionEntry conn = connections.get(connectionID);
+
+      if (conn != null && !conn.connection.isSupportReconnect()) {
+         removeConnection(connectionID);
+         if (connectionInactivity) {
+            conn.connection.fail(new ActiveMQRemoteDisconnectException());
+         } else {
+            conn.connection.close();
+         }
       }
    }
 

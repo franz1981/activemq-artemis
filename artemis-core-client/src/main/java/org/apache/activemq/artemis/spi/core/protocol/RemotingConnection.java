@@ -20,6 +20,7 @@ import java.util.List;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.ActiveMQRemoteDisconnectException;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.remoting.CloseListener;
 import org.apache.activemq.artemis.core.remoting.FailureListener;
@@ -121,6 +122,15 @@ public interface RemotingConnection extends BufferHandler {
    ActiveMQBuffer createTransportBuffer(int size);
 
    ActiveMQBuffer createTransportBuffer(int size, boolean pooled);
+
+   /**
+    * called when the underlying connection need to be closed.
+    * By default it will call the {@link #fail(ActiveMQException)} method
+    * passing to it a new {@link ActiveMQRemoteDisconnectException} parameter.
+    */
+   default void close() {
+      fail(new ActiveMQRemoteDisconnectException());
+   }
 
    /**
     * called when the underlying connection fails.
