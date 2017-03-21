@@ -178,6 +178,23 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, Cl
       }
    }
 
+   public final void removeConnection(ConnectionInfo info) throws InvalidClientIDException {
+      synchronized (clientIdSet) {
+         String clientId = info.getClientId();
+         if (clientId != null) {
+            AMQConnectionContext context = this.clientIdSet.get(clientId);
+            if (context != null && context.decRefCount() == 0) {
+               //connection is still there and need to close
+               context.getConnection().disconnect(false);
+               this.connections.remove(context.getConnection());
+               this.clientIdSet.remove(clientId);
+            }
+         } else {
+            throw new InvalidClientIDException("No clientID specified for connection disconnect request");
+         }
+      }
+   }
+
    public ScheduledExecutorService getScheduledPool() {
       return scheduledPool;
    }

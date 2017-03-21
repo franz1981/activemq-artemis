@@ -49,6 +49,17 @@ public interface BaseConnectionLifeCycleListener<ProtocolClass> {
    void connectionDestroyed(Object connectionID);
 
    /**
+    * Called when a connection is destroyed, specifying if due to connection inactivity.
+    * By default it will call {@link #connectionDestroyed(Object)}.
+    *
+    * @param connectionID         the connection being destroyed.
+    * @param connectionInactivity if the cause of the event id due to connection inactivity
+    */
+   default void connectionDestroyed(Object connectionID, boolean connectionInactivity) {
+      connectionDestroyed(connectionID);
+   }
+
+   /**
     * Called when an error occurs on the connection.
     *
     * @param connectionID the id of the connection.

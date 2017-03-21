@@ -613,6 +613,16 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
       shutdown(true);
    }
 
+   @Override
+   public final void close() {
+      try {
+         protocolManager.removeConnection(this.getConnectionInfo());
+      } catch (InvalidClientIDException e) {
+         ActiveMQServerLogger.LOGGER.warn("Couldn't close connection because invalid clientID", e);
+      }
+      shutdown(true);
+   }
+
    public void setAdvisorySession(AMQSession amqSession) {
       this.advisorySession = amqSession;
    }

@@ -77,6 +77,24 @@ public class ActiveMQProtonRemotingConnection extends AbstractRemotingConnection
       internalClose();
    }
 
+   /*
+    * This can be called concurrently by more than one thread so needs to be locked
+    */
+   @Override
+   public void close() {
+      if (destroyed) {
+         return;
+      }
+
+      destroyed = true;
+
+      callFailureListeners(null, null);
+
+      callClosingListeners();
+
+      internalClose();
+   }
+
    @Override
    public void destroy() {
       synchronized (this) {

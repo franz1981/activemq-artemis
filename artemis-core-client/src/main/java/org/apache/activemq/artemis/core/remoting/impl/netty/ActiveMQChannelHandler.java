@@ -72,7 +72,7 @@ public class ActiveMQChannelHandler extends ChannelDuplexHandler {
    public void channelInactive(final ChannelHandlerContext ctx) throws Exception {
       synchronized (this) {
          if (active) {
-            listener.connectionDestroyed(channelId(ctx.channel()));
+            listener.connectionDestroyed(channelId(ctx.channel()), true);
 
             active = false;
          }
