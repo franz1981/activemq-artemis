@@ -40,7 +40,7 @@
       <hornetq.version>2.4.7.Final</hornetq.version>
       <openhft.core.version>1.4.9</openhft.core.version>
       <openhft.affinity.version>3.0.6</openhft.affinity.version>
-      <openjdk.jmh.version>1.12</openjdk.jmh.version>
+      <openjdk.jmh.version>1.18</openjdk.jmh.version>
    </properties>
 
    <dependencies>
