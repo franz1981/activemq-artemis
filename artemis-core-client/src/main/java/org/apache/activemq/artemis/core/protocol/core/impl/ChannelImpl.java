@@ -23,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
@@ -39,6 +40,7 @@ import org.apache.activemq.artemis.core.protocol.core.Packet;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ActiveMQExceptionMessage;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.PacketsConfirmedMessage;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
+import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.utils.ConcurrentUtil;
 import org.jboss.logging.Logger;
 
@@ -296,14 +298,44 @@ public final class ChannelImpl implements Channel {
          }
 
          checkReconnectID(reconnectID);
-
-         // The actual send must be outside the lock, or with OIO transport, the write can block if the tcp
-         // buffer is full, preventing any incoming buffers being handled and blocking failover
-         connection.getTransportConnection().write(buffer, flush, batch);
-
-         buffer.release();
-
+         final Connection transportConnection = connection.getTransportConnection();
+         if (!batch) {
+            final long blockingCallTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(connection.getBlockingCallTimeout(), 0));
+            awaitAvailableCapacity(transportConnection, buffer.readableBytes(), blockingCallTimeoutNanos, 100_000L);
+         }
+         try {
+            // The actual send must be outside the lock, or with OIO transport, the write can block if the tcp
+            // buffer is full, preventing any incoming buffers being handled and blocking failover
+            transportConnection.write(buffer, flush, batch);
+         } finally {
+            buffer.release();
+         }
          return true;
+      }
+   }
+
+   private static void awaitAvailableCapacity(final Connection transportConnection,
+                                              final int requestedCapacity,
+                                              final long blockingCallTimeoutNanos,
+                                              final long checkpointPeriodNanos) {
+      //evaluate if the transport connection can handle the write request first and if can block until available
+      final long allowedBlockingNanos = transportConnection.isAllowedBlocking() ? blockingCallTimeoutNanos : 0;
+      final long startBlock = System.nanoTime();
+      final long deadline = startBlock + allowedBlockingNanos;
+      boolean canWrite;
+      while (!(canWrite = transportConnection.canWrite(requestedCapacity)) && System.nanoTime() < deadline) {
+         //wait to not burn too much CPU but with 1/10 of the BlockingCallTimeout granularity
+         LockSupport.parkNanos(checkpointPeriodNanos);
+      }
+      if (allowedBlockingNanos > 0) {
+         if (logger.isTraceEnabled()) {
+            final long elapsedNanos = System.nanoTime() - startBlock;
+            logger.trace("ChannelImpl::send packet is writing " + requestedCapacity + " bytes after being blocked for  " + TimeUnit.NANOSECONDS.toMillis(elapsedNanos) + "/" + TimeUnit.NANOSECONDS.toMillis(allowedBlockingNanos) + " ms ");
+         }
+      }
+      //write a warn if the block was too long without freeing the connection write buffer
+      if (allowedBlockingNanos > 0 && !canWrite) {
+         logger.warn("ChannelImpl::send packet is writing " + requestedCapacity + " bytes without enough room to do it [wait time: " + TimeUnit.NANOSECONDS.toMillis(allowedBlockingNanos) + " ms ]");
       }
    }
 

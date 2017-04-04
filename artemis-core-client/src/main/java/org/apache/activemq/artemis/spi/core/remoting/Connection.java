@@ -43,6 +43,14 @@ public interface Connection {
 
    boolean isWritable(ReadyListener listener);
 
+   default boolean isAllowedBlocking() {
+      return false;
+   }
+
+   default boolean canWrite(int requestedCapacity) {
+      return true;
+   }
+
    void fireReady(boolean ready);
 
    /**

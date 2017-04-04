@@ -43,11 +43,6 @@ import org.apache.activemq.artemis.utils.IPV6Util;
 
 public class NettyConnection implements Connection {
 
-   private static final int DEFAULT_MTU_BYTES = Integer.getInteger("io.netty.mtu", 1460);
-   //backpressure on unbatched writes is enabled by default
-   private static final boolean ENABLED_RELAXED_BACK_PRESSURE = !Boolean.getBoolean("io.netty.disable.backpressure");
-   //it is the limit while waiting the data to be flushed and alerting (if in trace mode) the event
-   private static final long DEFAULT_BACK_PRESSURE_WAIT_MILLIS = Long.getLong("io.netty.backpressure.millis", 1_000L);
    //if not specified the default batch size will be equal to the ChannelConfig::writeBufferHighWaterMark
    private static final int DEFAULT_BATCH_BYTES = Integer.getInteger("io.netty.batch.bytes", Integer.MAX_VALUE);
    private static final int DEFAULT_WAIT_MILLIS = 10_000;
@@ -120,32 +115,6 @@ public class NettyConnection implements Connection {
       final int writtenBytes = writeBufferHighWaterMark - bytesBeforeUnwritable;
       assert writtenBytes >= 0;
       return writtenBytes;
-   }
-
-   /**
-    * When batching is not enabled, it tries to back-pressure the caller thread.
-    * The back-pressure provided is not before the writeAndFlush request, buf after it: too many threads that are not
-    * using {@link Channel#isWritable} to know when push unbatched data will risk to cause OOM due to the enqueue of each own {@link Channel#writeAndFlush} requests.
-    * Trying to provide back-pressure before the {@link Channel#writeAndFlush} request could work, but in certain scenarios it will block {@link Channel#isWritable} to be true.
-    */
-   private static ChannelFuture backPressuredWriteAndFlush(final ByteBuf bytes,
-                                                           final int readableBytes,
-                                                           final Channel channel,
-                                                           final ChannelPromise promise) {
-      final ChannelFuture future;
-      if (!channel.isWritable()) {
-         final ChannelPromise channelPromise = promise.isVoid() ? channel.newPromise() : promise;
-         future = channel.writeAndFlush(bytes, channelPromise);
-         //is the channel is not writable wait the current request to be flushed, providing backpressuring on the caller thread
-         if (!channel.isWritable() && !future.awaitUninterruptibly(DEFAULT_BACK_PRESSURE_WAIT_MILLIS)) {
-            if (ActiveMQClientLogger.LOGGER.isTraceEnabled()) {
-               ActiveMQClientLogger.LOGGER.trace(Thread.currentThread().getName() + " - [" + channel.id() + "] unable to flush " + readableBytes + " bytes in " + DEFAULT_BACK_PRESSURE_WAIT_MILLIS + " ms");
-            }
-         }
-      } else {
-         future = channel.writeAndFlush(bytes, promise);
-      }
-      return future;
    }
 
    public final int batchBufferCapacity() {
@@ -325,6 +294,11 @@ public class NettyConnection implements Connection {
                            final boolean flush,
                            final boolean batched,
                            final ChannelFutureListener futureListener) {
+      final int readableBytes = buffer.readableBytes();
+      final int remainingBytes = this.writeBufferHighWaterMark - readableBytes;
+      if (remainingBytes < 0) {
+         ActiveMQClientLogger.LOGGER.warn("a write request is exceeding by " + (-remainingBytes) + " bytes the writeBufferHighWaterMark size [ " + this.writeBufferHighWaterMark + " ] : consider to set it at least of " + readableBytes + " bytes");
+      }
       //no need to lock because the Netty's channel is thread-safe
       //and the order of write is ensured by the order of the write calls
       final EventLoop eventLoop = channel.eventLoop();
@@ -341,14 +315,47 @@ public class NettyConnection implements Connection {
          // until the loop will process it, leading to a longer life for the ActiveMQBuffer buffer!!!
          // To solve it, will be necessary to manually perform the count of the current batch instead of rely on the
          // Channel:Config::writeBufferHighWaterMark value.
-         pendingWritesOnEventLoop += buffer.readableBytes();
-         pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
+         this.pendingWritesOnEventLoop += readableBytes;
+         this.pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
          eventLoop.execute(() -> {
-            pendingWritesOnEventLoop -= buffer.readableBytes();
-            pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
+            this.pendingWritesOnEventLoop -= readableBytes;
+            this.pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
             writeInEventLoop(buffer, flush, batched, futureListener);
          });
       }
+   }
+
+   @Override
+   public final boolean isAllowedBlocking() {
+      final EventLoop eventLoop = channel.eventLoop();
+      final boolean inEventLoop = eventLoop.inEventLoop();
+      return !inEventLoop;
+   }
+
+   @Override
+   public final boolean canWrite(final int requestedCapacity) {
+      final EventLoop eventLoop = channel.eventLoop();
+      final boolean inEventLoop = eventLoop.inEventLoop();
+      //evaluate if the write request could be taken:
+      //there is enough space in the write buffer?
+      //The pending writes on event loop will eventually go into the Netty write buffer, hence consider them
+      //as part of the heuristic!
+      final long pendingWritesOnEventLoop;
+      if (inEventLoop) {
+         pendingWritesOnEventLoop = this.pendingWritesOnEventLoop;
+      } else {
+         pendingWritesOnEventLoop = pendingWritesOnEventLoopView.get();
+      }
+      final long totalPendingWrites = pendingWritesOnEventLoop + this.pendingWritesOnChannel();
+      final boolean canWrite;
+      if (requestedCapacity > this.writeBufferHighWaterMark) {
+         //warns that the writeBufferHighWaterMark need to be bigger!
+         //ActiveMQClientLogger.LOGGER.warn(Thread.currentThread().getThreadGroup().getName() + " - [" + channel.id() + "] is trying to write " + requestedCapacity + " bytes on a write buffer of " + this.writeBufferHighWaterMark + " bytes: please increase the Netty's write buffer high watermark!");
+         canWrite = totalPendingWrites == 0;
+      } else {
+         canWrite = (totalPendingWrites + requestedCapacity) <= this.writeBufferHighWaterMark;
+      }
+      return canWrite;
    }
 
    private void writeNotInEventLoop(ActiveMQBuffer buffer,
@@ -371,12 +378,7 @@ public class NettyConnection implements Connection {
       if (batchingEnabled && batched && !flush && readableBytes < writeBatchSize) {
          future = writeBatch(bytes, readableBytes, promise);
       } else {
-         //enable relaxed back-pressuring only for "big" writes and only when batching is not enabled -> no background calls on this::checkFlushBatchBuffer
-         if (ENABLED_RELAXED_BACK_PRESSURE && !batchingEnabled && readableBytes > DEFAULT_MTU_BYTES) {
-            future = backPressuredWriteAndFlush(bytes, readableBytes, channel, promise);
-         } else {
-            future = channel.writeAndFlush(bytes, promise);
-         }
+         future = channel.writeAndFlush(bytes, promise);
       }
       if (futureListener != null) {
          future.addListener(futureListener);
