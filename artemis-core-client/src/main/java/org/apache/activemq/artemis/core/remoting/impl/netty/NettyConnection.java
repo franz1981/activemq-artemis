@@ -20,7 +20,9 @@ import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.channel.Channel;
@@ -62,6 +64,10 @@ public class NettyConnection implements Connection {
    private final int writeBufferHighWaterMark;
    private final int batchLimit;
 
+   /**
+    * This counter is splitted in 2 variables to write it with less performance
+    * impact: no volatile get is required to update its value
+    */
    private final AtomicLong pendingWritesOnEventLoopView = new AtomicLong();
    private long pendingWritesOnEventLoop = 0;
 
@@ -117,23 +123,23 @@ public class NettyConnection implements Connection {
       return writtenBytes;
    }
 
-   public final int batchBufferCapacity() {
-      return this.batchLimit;
-   }
-
-   public final boolean isBatchingEnabled() {
-      return batchingEnabled;
-   }
-
    public final int pendingWritesOnChannel() {
       return batchBufferSize(this.channel, this.writeBufferHighWaterMark);
    }
 
    public final long pendingWritesOnEventLoop() {
-      return pendingWritesOnEventLoopView.get();
+      final EventLoop eventLoop = channel.eventLoop();
+      final boolean inEventLoop = eventLoop.inEventLoop();
+      final long pendingWritesOnEventLoop;
+      if (inEventLoop) {
+         pendingWritesOnEventLoop = this.pendingWritesOnEventLoop;
+      } else {
+         pendingWritesOnEventLoop = pendingWritesOnEventLoopView.get();
+      }
+      return pendingWritesOnEventLoop;
    }
 
-   public Channel getNettyChannel() {
+   public final Channel getNettyChannel() {
       return channel;
    }
 
@@ -290,6 +296,53 @@ public class NettyConnection implements Connection {
    }
 
    @Override
+   public final boolean blockUntilWritable(final int requiredCapacity, final long timeout, final TimeUnit timeUnit) {
+      final boolean isAllowedToBlock = isAllowedToBlock();
+      if (!isAllowedToBlock) {
+         return canWrite(requiredCapacity);
+      } else {
+         final long timeoutNanos = timeUnit.toNanos(timeout);
+         final long deadline = System.nanoTime() + timeoutNanos;
+         //choose wait time unit size
+         final long parkNanos;
+         //if is requested to wait more than a millisecond than we could use
+         if (timeoutNanos >= 1_000_000L) {
+            parkNanos = 100_000L;
+         } else {
+            //reduce it doesn't make sense, only a spin loop could be enough precise with the most OS
+            parkNanos = 1000L;
+         }
+         boolean canWrite;
+         while (!(canWrite = canWrite(requiredCapacity)) && System.nanoTime() < deadline) {
+            LockSupport.parkNanos(parkNanos);
+         }
+         return canWrite;
+      }
+   }
+
+   private boolean isAllowedToBlock() {
+      final EventLoop eventLoop = channel.eventLoop();
+      final boolean inEventLoop = eventLoop.inEventLoop();
+      return !inEventLoop;
+   }
+
+   private boolean canWrite(final int requiredCapacity) {
+      //evaluate if the write request could be taken:
+      //there is enough space in the write buffer?
+      //The pending writes on event loop will eventually go into the Netty write buffer, hence consider them
+      //as part of the heuristic!
+      final long pendingWritesOnEventLoop = this.pendingWritesOnEventLoop();
+      final long totalPendingWrites = pendingWritesOnEventLoop + this.pendingWritesOnChannel();
+      final boolean canWrite;
+      if (requiredCapacity > this.writeBufferHighWaterMark) {
+         canWrite = totalPendingWrites == 0;
+      } else {
+         canWrite = (totalPendingWrites + requiredCapacity) <= this.writeBufferHighWaterMark;
+      }
+      return canWrite;
+   }
+
+   @Override
    public final void write(ActiveMQBuffer buffer,
                            final boolean flush,
                            final boolean batched,
@@ -323,39 +376,6 @@ public class NettyConnection implements Connection {
             writeInEventLoop(buffer, flush, batched, futureListener);
          });
       }
-   }
-
-   @Override
-   public final boolean isAllowedBlocking() {
-      final EventLoop eventLoop = channel.eventLoop();
-      final boolean inEventLoop = eventLoop.inEventLoop();
-      return !inEventLoop;
-   }
-
-   @Override
-   public final boolean canWrite(final int requestedCapacity) {
-      final EventLoop eventLoop = channel.eventLoop();
-      final boolean inEventLoop = eventLoop.inEventLoop();
-      //evaluate if the write request could be taken:
-      //there is enough space in the write buffer?
-      //The pending writes on event loop will eventually go into the Netty write buffer, hence consider them
-      //as part of the heuristic!
-      final long pendingWritesOnEventLoop;
-      if (inEventLoop) {
-         pendingWritesOnEventLoop = this.pendingWritesOnEventLoop;
-      } else {
-         pendingWritesOnEventLoop = pendingWritesOnEventLoopView.get();
-      }
-      final long totalPendingWrites = pendingWritesOnEventLoop + this.pendingWritesOnChannel();
-      final boolean canWrite;
-      if (requestedCapacity > this.writeBufferHighWaterMark) {
-         //warns that the writeBufferHighWaterMark need to be bigger!
-         //ActiveMQClientLogger.LOGGER.warn(Thread.currentThread().getThreadGroup().getName() + " - [" + channel.id() + "] is trying to write " + requestedCapacity + " bytes on a write buffer of " + this.writeBufferHighWaterMark + " bytes: please increase the Netty's write buffer high watermark!");
-         canWrite = totalPendingWrites == 0;
-      } else {
-         canWrite = (totalPendingWrites + requestedCapacity) <= this.writeBufferHighWaterMark;
-      }
-      return canWrite;
    }
 
    private void writeNotInEventLoop(ActiveMQBuffer buffer,

@@ -23,7 +23,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
@@ -300,8 +299,15 @@ public final class ChannelImpl implements Channel {
          checkReconnectID(reconnectID);
          final Connection transportConnection = connection.getTransportConnection();
          if (!batch) {
-            final long blockingCallTimeoutNanos = TimeUnit.MILLISECONDS.toNanos(Math.max(connection.getBlockingCallTimeout(), 0));
-            awaitAvailableCapacity(transportConnection, buffer.readableBytes(), blockingCallTimeoutNanos, 100_000L);
+            final long blockingCallTimeout = connection.getBlockingCallTimeout();
+            //on server side code the block timeout will be <=0
+            if (blockingCallTimeout > 0) {
+               final int requiredCapacity = buffer.readableBytes();
+               final boolean writable = transportConnection.blockUntilWritable(requiredCapacity, blockingCallTimeout, TimeUnit.MILLISECONDS);
+               if (!writable) {
+                  logger.warn("ChannelImpl::send packet is writing " + requiredCapacity + " bytes on a not writable connection");
+               }
+            }
          }
          try {
             // The actual send must be outside the lock, or with OIO transport, the write can block if the tcp
@@ -311,31 +317,6 @@ public final class ChannelImpl implements Channel {
             buffer.release();
          }
          return true;
-      }
-   }
-
-   private static void awaitAvailableCapacity(final Connection transportConnection,
-                                              final int requestedCapacity,
-                                              final long blockingCallTimeoutNanos,
-                                              final long checkpointPeriodNanos) {
-      //evaluate if the transport connection can handle the write request first and if can block until available
-      final long allowedBlockingNanos = transportConnection.isAllowedBlocking() ? blockingCallTimeoutNanos : 0;
-      final long startBlock = System.nanoTime();
-      final long deadline = startBlock + allowedBlockingNanos;
-      boolean canWrite;
-      while (!(canWrite = transportConnection.canWrite(requestedCapacity)) && System.nanoTime() < deadline) {
-         //wait to not burn too much CPU but with 1/10 of the BlockingCallTimeout granularity
-         LockSupport.parkNanos(checkpointPeriodNanos);
-      }
-      if (allowedBlockingNanos > 0) {
-         if (logger.isTraceEnabled()) {
-            final long elapsedNanos = System.nanoTime() - startBlock;
-            logger.trace("ChannelImpl::send packet is writing " + requestedCapacity + " bytes after being blocked for  " + TimeUnit.NANOSECONDS.toMillis(elapsedNanos) + "/" + TimeUnit.NANOSECONDS.toMillis(allowedBlockingNanos) + " ms ");
-         }
-      }
-      //write a warn if the block was too long without freeing the connection write buffer
-      if (allowedBlockingNanos > 0 && !canWrite) {
-         logger.warn("ChannelImpl::send packet is writing " + requestedCapacity + " bytes without enough room to do it [wait time: " + TimeUnit.NANOSECONDS.toMillis(allowedBlockingNanos) + " ms ]");
       }
    }
 
