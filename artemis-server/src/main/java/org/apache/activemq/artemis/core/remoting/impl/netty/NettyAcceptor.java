@@ -44,6 +44,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.ChannelGroupFuture;
 import io.netty.channel.group.DefaultChannelGroup;
@@ -313,6 +314,7 @@ public class NettyAcceptor extends AbstractAcceptor {
       if (tcpSendBufferSize != -1) {
          bootstrap.childOption(ChannelOption.SO_SNDBUF, tcpSendBufferSize);
       }
+      bootstrap.childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(64 * 1024, 256 * 1024));
       if (backlog != -1) {
          bootstrap.option(ChannelOption.SO_BACKLOG, backlog);
       }

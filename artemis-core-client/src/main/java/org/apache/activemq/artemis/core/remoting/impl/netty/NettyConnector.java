@@ -58,6 +58,7 @@ import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.group.ChannelGroup;
 import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
@@ -405,6 +406,7 @@ public class NettyConnector extends AbstractConnector {
       if (tcpSendBufferSize != -1) {
          bootstrap.option(ChannelOption.SO_SNDBUF, tcpSendBufferSize);
       }
+      bootstrap.option(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(64 * 1024, 256 * 1024));
       bootstrap.option(ChannelOption.SO_KEEPALIVE, true);
       bootstrap.option(ChannelOption.SO_REUSEADDR, true);
       channelGroup = new DefaultChannelGroup("activemq-connector", GlobalEventExecutor.INSTANCE);
