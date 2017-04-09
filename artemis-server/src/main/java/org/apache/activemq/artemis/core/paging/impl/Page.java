@@ -22,10 +22,15 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.netty.buffer.UnpooledUnsafeDirectByteBufWrapper;
+import io.netty.util.internal.PlatformDependent;
+import io.netty.util.internal.shaded.org.jctools.util.Pow2;
+import io.netty.util.internal.shaded.org.jctools.util.UnsafeAccess;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ICoreMessage;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.core.buffers.impl.ChannelBufferWrapper;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
 import org.apache.activemq.artemis.core.paging.PagedMessage;
@@ -78,6 +83,12 @@ public final class Page implements Comparable<Page> {
     */
    private Set<PageSubscriptionCounter> pendingCounters;
 
+   //Used to speed up writes: enable pooling while write.
+   //if not used inside a container could be turned in a static ThreadLocal instance too
+   private final UnpooledUnsafeDirectByteBufWrapper byteBufWrapper;
+   private final ChannelBufferWrapper channelBufferWrapper;
+   private ByteBuffer pooledDirectBuffer;
+
    public Page(final SimpleString storeName,
                final StorageManager storageManager,
                final SequentialFileFactory factory,
@@ -88,6 +99,33 @@ public final class Page implements Comparable<Page> {
       fileFactory = factory;
       this.storageManager = storageManager;
       this.storeName = storeName;
+
+      this.pooledDirectBuffer = null;
+      this.byteBufWrapper = new UnpooledUnsafeDirectByteBufWrapper();
+      this.channelBufferWrapper = new ChannelBufferWrapper(this.byteBufWrapper, false);
+   }
+
+   private ActiveMQBuffer acquireActiveMQBuffer(int requiredCapacity) {
+      boolean needZeroing;
+      if (this.pooledDirectBuffer == null || this.pooledDirectBuffer.capacity() < requiredCapacity) {
+         if (this.pooledDirectBuffer != null) {
+            //release the old pooled buffer without waiting the GC
+            PlatformDependent.freeDirectBuffer(this.pooledDirectBuffer);
+         }
+         //align its required capacity to the OS's page size -> the OS will do it anyway
+         final int alignedRequiredCapacity = (int) Pow2.align(requiredCapacity, UnsafeAccess.UNSAFE.pageSize());
+         this.pooledDirectBuffer = this.fileFactory.allocateDirectBuffer(alignedRequiredCapacity);
+         needZeroing = false;
+      } else {
+         this.pooledDirectBuffer.clear();
+         needZeroing = true;
+      }
+      this.pooledDirectBuffer.limit(requiredCapacity);
+      this.byteBufWrapper.wrap(this.pooledDirectBuffer, 0, requiredCapacity);
+      if (needZeroing) {
+         this.byteBufWrapper.setZero(0, requiredCapacity);
+      }
+      return this.channelBufferWrapper;
    }
 
    public int getPageId() {
@@ -175,29 +213,29 @@ public final class Page implements Comparable<Page> {
          return;
       }
 
-      ByteBuffer buffer = fileFactory.newBuffer(message.getEncodeSize() + Page.SIZE_RECORD);
-
-      ActiveMQBuffer wrap = ActiveMQBuffers.wrappedBuffer(buffer);
-      wrap.clear();
-
-      wrap.writeByte(Page.START_BYTE);
-      wrap.writeInt(0);
-      int startIndex = wrap.writerIndex();
-      message.encode(wrap);
-      int endIndex = wrap.writerIndex();
-      wrap.setInt(1, endIndex - startIndex); // The encoded length
-      wrap.writeByte(Page.END_BYTE);
-
-      buffer.rewind();
-
-      file.writeDirect(buffer, false);
+      final int requiredCapacity = message.getEncodeSize() + Page.SIZE_RECORD;
+      //any modification to the writeBuffer is reflected in the pooledDirectBuffer content
+      final ActiveMQBuffer writeBuffer = acquireActiveMQBuffer(requiredCapacity);
+      //write content
+      writeBuffer.writeByte(Page.START_BYTE);
+      writeBuffer.writeInt(0);
+      int startIndex = writeBuffer.writerIndex();
+      message.encode(writeBuffer);
+      int endIndex = writeBuffer.writerIndex();
+      final int encodedLength = endIndex - startIndex;
+      assert encodedLength == message.getEncodeSize();
+      writeBuffer.setInt(1, encodedLength);
+      writeBuffer.writeByte(Page.END_BYTE);
+      assert this.pooledDirectBuffer.position() == 0 && this.pooledDirectBuffer.limit() == requiredCapacity && this.pooledDirectBuffer.capacity() >= requiredCapacity;
+      //write into the sequential file
+      file.writeDirect(this.pooledDirectBuffer, false);
 
       if (pageCache != null) {
          pageCache.addLiveMessage(message);
       }
 
       numberOfMessages.incrementAndGet();
-      size.addAndGet(buffer.limit());
+      size.addAndGet(requiredCapacity);
 
       storageManager.pageWrite(message, pageId);
    }
@@ -223,20 +261,27 @@ public final class Page implements Comparable<Page> {
     * While reading the cache we don't need (and shouldn't inform the backup
     */
    public synchronized void close(boolean sendEvent) throws Exception {
-      if (sendEvent && storageManager != null) {
-         storageManager.pageClosed(storeName, pageId);
-      }
-      if (pageCache != null) {
-         pageCache.close();
-         // leave it to the soft cache to decide when to release it now
-         pageCache = null;
-      }
-      file.close();
+      try {
+         if (sendEvent && storageManager != null) {
+            storageManager.pageClosed(storeName, pageId);
+         }
+         if (pageCache != null) {
+            pageCache.close();
+            // leave it to the soft cache to decide when to release it now
+            pageCache = null;
+         }
+         file.close();
 
-      Set<PageSubscriptionCounter> counters = getPendingCounters();
-      if (counters != null) {
-         for (PageSubscriptionCounter counter : counters) {
-            counter.cleanupNonTXCounters(this.getPageId());
+         Set<PageSubscriptionCounter> counters = getPendingCounters();
+         if (counters != null) {
+            for (PageSubscriptionCounter counter : counters) {
+               counter.cleanupNonTXCounters(this.getPageId());
+            }
+         }
+      } finally {
+         if (this.pooledDirectBuffer != null) {
+            PlatformDependent.freeDirectBuffer(this.pooledDirectBuffer);
+            this.pooledDirectBuffer = null;
          }
       }
    }
