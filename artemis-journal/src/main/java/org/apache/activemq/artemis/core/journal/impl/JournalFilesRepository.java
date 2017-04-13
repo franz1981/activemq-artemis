@@ -34,7 +34,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 import org.jboss.logging.Logger;
 
@@ -418,15 +417,16 @@ public class JournalFilesRepository {
          openFilesExecutor.execute(pushOpenRunnable);
       }
 
-      JournalFile nextFile = openedFiles.poll(5, TimeUnit.SECONDS);
-      if (nextFile == null) {
-         fileFactory.onIOError(ActiveMQJournalBundle.BUNDLE.fileNotOpened(), "unable to open ", null);
-         // We need to reconnect the current file with the timed buffer as we were not able to roll the file forward
-         // If you don't do this you will get a NPE in TimedBuffer::checkSize where it uses the bufferobserver
-         fileFactory.activateBuffer(journal.getCurrentFile().getFile());
-         throw ActiveMQJournalBundle.BUNDLE.fileNotOpened();
+      int waitCount = 0;
+      //nextFile MUST be populated in some way or the calling thread need to be interrupted.
+      //the caller can't proceed with a null JournalFile
+      //The risk is that a too long wait will cause too many not synced append requests to be enqueued
+      //and lead it to OOM.
+      JournalFile nextFile;
+      while ((nextFile = openedFiles.poll(5, TimeUnit.SECONDS)) == null) {
+         waitCount++;
+         logger.warn("can't find any new nextFile after waiting " + (waitCount * 5) + " seconds! retry...");
       }
-
       if (logger.isTraceEnabled()) {
          logger.trace("Returning file " + nextFile);
       }
