@@ -18,6 +18,8 @@ package org.apache.activemq.artemis.core.io.aio;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.nio.ByteBuffer;
 import java.util.PriorityQueue;
 import java.util.concurrent.Executor;
@@ -101,6 +103,10 @@ public class AIOSequentialFile extends AbstractSequentialFile {
       super.close();
 
       if (!pendingCallbacks.await(10, TimeUnit.SECONDS)) {
+         final ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+         for (ThreadInfo threadInfo : threads) {
+            ActiveMQJournalLogger.LOGGER.warn(threadInfo.toString());
+         }
          factory.onIOError(new IOException("Timeout on close"), "Timeout on close", this);
       }
 
