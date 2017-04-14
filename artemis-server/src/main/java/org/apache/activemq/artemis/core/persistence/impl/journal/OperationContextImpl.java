@@ -20,6 +20,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,6 +45,26 @@ import org.apache.activemq.artemis.utils.ExecutorFactory;
 public class OperationContextImpl implements OperationContext {
 
    private static final ThreadLocal<OperationContext> threadLocalContext = new ThreadLocal<>();
+   private final AtomicLong storeLineUp = new AtomicLong(0);
+   private final AtomicLong replicationLineUp = new AtomicLong(0);
+   private final AtomicLong pageLineUp = new AtomicLong(0);
+   private final Executor executor;
+   private final AtomicInteger executorsPending = new AtomicInteger(0);
+   private List<TaskHolder> tasks;
+   private List<TaskHolder> storeOnlyTasks;
+   private long minimalStore = Long.MAX_VALUE;
+   private long minimalReplicated = Long.MAX_VALUE;
+   private long minimalPage = Long.MAX_VALUE;
+   private long stored = 0;
+   private long replicated = 0;
+   private long paged = 0;
+   private int errorCode = -1;
+   private String errorMessage = null;
+
+   public OperationContextImpl(final Executor executor) {
+      super();
+      this.executor = executor;
+   }
 
    public static void clearContext() {
       OperationContextImpl.threadLocalContext.set(null);
@@ -51,6 +72,10 @@ public class OperationContextImpl implements OperationContext {
 
    public static final OperationContext getContext() {
       return getContext(null);
+   }
+
+   public static void setContext(final OperationContext context) {
+      OperationContextImpl.threadLocalContext.set(context);
    }
 
    public static OperationContext getContext(final ExecutorFactory executorFactory) {
@@ -64,38 +89,6 @@ public class OperationContextImpl implements OperationContext {
          }
       }
       return token;
-   }
-
-   public static void setContext(final OperationContext context) {
-      OperationContextImpl.threadLocalContext.set(context);
-   }
-
-   private List<TaskHolder> tasks;
-   private List<TaskHolder> storeOnlyTasks;
-
-   private long minimalStore = Long.MAX_VALUE;
-   private long minimalReplicated = Long.MAX_VALUE;
-   private long minimalPage = Long.MAX_VALUE;
-
-   private final AtomicLong storeLineUp = new AtomicLong(0);
-   private final AtomicLong replicationLineUp = new AtomicLong(0);
-   private final AtomicLong pageLineUp = new AtomicLong(0);
-
-   private long stored = 0;
-   private long replicated = 0;
-   private long paged = 0;
-
-   private int errorCode = -1;
-
-   private String errorMessage = null;
-
-   private final Executor executor;
-
-   private final AtomicInteger executorsPending = new AtomicInteger(0);
-
-   public OperationContextImpl(final Executor executor) {
-      super();
-      this.executor = executor;
    }
 
    @Override
@@ -132,53 +125,65 @@ public class OperationContextImpl implements OperationContext {
 
    @Override
    public void executeOnCompletion(final IOCallback completion, final boolean storeOnly) {
-      if (errorCode != -1) {
-         completion.onError(errorCode, errorMessage);
-         return;
-      }
-
-      boolean executeNow = false;
-
-      synchronized (this) {
-         if (storeOnly) {
-            if (storeOnlyTasks == null) {
-               storeOnlyTasks = new LinkedList<>();
-            }
-         } else {
-            if (tasks == null) {
-               tasks = new LinkedList<>();
-               minimalReplicated = replicationLineUp.intValue();
-               minimalStore = storeLineUp.intValue();
-               minimalPage = pageLineUp.intValue();
-            }
+      final long start = System.nanoTime();
+      try {
+         if (errorCode != -1) {
+            completion.onError(errorCode, errorMessage);
+            return;
          }
 
-         // On this case, we can just execute the context directly
+         boolean executeNow = false;
 
-         if (replicationLineUp.intValue() == replicated && storeLineUp.intValue() == stored &&
-            pageLineUp.intValue() == paged) {
-            // We want to avoid the executor if everything is complete...
-            // However, we can't execute the context if there are executions pending
-            // We need to use the executor on this case
-            if (executorsPending.get() == 0) {
-               // No need to use an executor here or a context switch
-               // there are no actions pending.. hence we can just execute the task directly on the same thread
-               executeNow = true;
-            } else {
-               execute(completion);
-            }
-         } else {
+         synchronized (this) {
             if (storeOnly) {
-               storeOnlyTasks.add(new TaskHolder(completion));
+               if (storeOnlyTasks == null) {
+                  storeOnlyTasks = new LinkedList<>();
+               }
             } else {
-               tasks.add(new TaskHolder(completion));
+               if (tasks == null) {
+                  tasks = new LinkedList<>();
+                  minimalReplicated = replicationLineUp.intValue();
+                  minimalStore = storeLineUp.intValue();
+                  minimalPage = pageLineUp.intValue();
+               }
+            }
+
+            // On this case, we can just execute the context directly
+
+            if (replicationLineUp.intValue() == replicated && storeLineUp.intValue() == stored && pageLineUp.intValue() == paged) {
+               // We want to avoid the executor if everything is complete...
+               // However, we can't execute the context if there are executions pending
+               // We need to use the executor on this case
+               if (executorsPending.get() == 0) {
+                  // No need to use an executor here or a context switch
+                  // there are no actions pending.. hence we can just execute the task directly on the same thread
+                  executeNow = true;
+               } else {
+                  execute(completion);
+               }
+            } else {
+               if (storeOnly) {
+                  storeOnlyTasks.add(new TaskHolder(completion));
+               } else {
+                  tasks.add(new TaskHolder(completion));
+               }
             }
          }
-      }
 
-      if (executeNow) {
-         // Executing outside of any locks
-         completion.done();
+         if (executeNow) {
+            // Executing outside of any locks: measure if it takes too long or spawn any exception!
+            try {
+               completion.done();
+            } catch (Throwable t) {
+               ActiveMQServerLogger.LOGGER.error("error on completion:done executed without an executor", t);
+            }
+         }
+      } finally {
+         final long elapsed = System.nanoTime() - start;
+         final long seconds = TimeUnit.NANOSECONDS.toSeconds(elapsed);
+         if (seconds > 3) {
+            ActiveMQServerLogger.LOGGER.warn("executeOnCompletion { storeOnly = " + storeOnly + " , completion = " + completion + " } HAS TAKEN TOO LONG: " + seconds + " secs");
+         }
       }
 
    }
@@ -268,34 +273,6 @@ public class OperationContextImpl implements OperationContext {
       }
    }
 
-   final class TaskHolder {
-
-      @Override
-      public String toString() {
-         return "TaskHolder [storeLined=" + storeLined +
-            ", replicationLined=" +
-            replicationLined +
-            ", pageLined=" +
-            pageLined +
-            ", task=" +
-            task +
-            "]";
-      }
-
-      final int storeLined;
-      final int replicationLined;
-      final int pageLined;
-
-      final IOCallback task;
-
-      TaskHolder(final IOCallback task) {
-         storeLined = storeLineUp.intValue();
-         replicationLined = replicationLineUp.intValue();
-         pageLined = pageLineUp.intValue();
-         this.task = task;
-      }
-   }
-
    @Override
    public void waitCompletion() throws Exception {
       waitCompletion(0);
@@ -323,30 +300,26 @@ public class OperationContextImpl implements OperationContext {
          }
       }
 
-      return "OperationContextImpl [" + hashCode() + "] [minimalStore=" + minimalStore +
-         ", storeLineUp=" +
-         storeLineUp +
-         ", stored=" +
-         stored +
-         ", minimalReplicated=" +
-         minimalReplicated +
-         ", replicationLineUp=" +
-         replicationLineUp +
-         ", replicated=" +
-         replicated +
-         ", paged=" +
-         paged +
-         ", minimalPage=" +
-         minimalPage +
-         ", pageLineUp=" +
-         pageLineUp +
-         ", errorCode=" +
-         errorCode +
-         ", errorMessage=" +
-         errorMessage +
-         ", executorsPending=" +
-         executorsPending +
-         ", executor=" + this.executor +
-         "]" + buffer.toString();
+      return "OperationContextImpl [" + hashCode() + "] [minimalStore=" + minimalStore + ", storeLineUp=" + storeLineUp + ", stored=" + stored + ", minimalReplicated=" + minimalReplicated + ", replicationLineUp=" + replicationLineUp + ", replicated=" + replicated + ", paged=" + paged + ", minimalPage=" + minimalPage + ", pageLineUp=" + pageLineUp + ", errorCode=" + errorCode + ", errorMessage=" + errorMessage + ", executorsPending=" + executorsPending + ", executor=" + this.executor + "]" + buffer.toString();
+   }
+
+   final class TaskHolder {
+
+      final int storeLined;
+      final int replicationLined;
+      final int pageLined;
+      final IOCallback task;
+
+      TaskHolder(final IOCallback task) {
+         storeLined = storeLineUp.intValue();
+         replicationLined = replicationLineUp.intValue();
+         pageLined = pageLineUp.intValue();
+         this.task = task;
+      }
+
+      @Override
+      public String toString() {
+         return "TaskHolder [storeLined=" + storeLined + ", replicationLined=" + replicationLined + ", pageLined=" + pageLined + ", task=" + task + "]";
+      }
    }
 }
