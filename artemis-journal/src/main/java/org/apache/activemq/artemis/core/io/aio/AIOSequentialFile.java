@@ -102,20 +102,40 @@ public class AIOSequentialFile extends AbstractSequentialFile {
 
       super.close();
 
-      if (!pendingCallbacks.await(10, TimeUnit.SECONDS)) {
-         final ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
-         for (ThreadInfo threadInfo : threads) {
-            ActiveMQJournalLogger.LOGGER.warn(threadInfo.toString());
+      final String fileName = this.getFileName();
+      try {
+         int waitCount = 0;
+         while (!pendingCallbacks.await(10, TimeUnit.SECONDS)) {
+            waitCount++;
+            if (waitCount == 1) {
+               final ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+               for (ThreadInfo threadInfo : threads) {
+                  ActiveMQJournalLogger.LOGGER.warn(threadInfo.toString());
+               }
+               factory.onIOError(new IOException("Timeout on close"), "Timeout on close", this);
+            }
+            ActiveMQJournalLogger.LOGGER.warn("waiting pending callbacks on " + fileName + " from " + (waitCount * 10) + " seconds!");
          }
-         factory.onIOError(new IOException("Timeout on close"), "Timeout on close", this);
+      } catch (InterruptedException e) {
+         ActiveMQJournalLogger.LOGGER.warn("interrupted while waiting pending callbacks on " + fileName, e);
+         throw e;
+      } finally {
+
+         ActiveMQJournalLogger.LOGGER.info("finished wait for pending callbacks on " + fileName);
+
+         opened = false;
+
+         timedBuffer = null;
+
+         ActiveMQJournalLogger.LOGGER.info("start close AIO FD " + fileName);
+
+         aioFile.close();
+
+         ActiveMQJournalLogger.LOGGER.info("closed AIO FD " + fileName);
+
+         aioFile = null;
+
       }
-
-      opened = false;
-
-      timedBuffer = null;
-
-      aioFile.close();
-      aioFile = null;
    }
 
    @Override
