@@ -26,18 +26,17 @@ import java.util.concurrent.locks.LockSupport;
  */
 final class BestEffortIOLimiter implements IOLimiter {
 
-   //after IO_INTERVAL_NANOS each previous IOs will not be considered anymore -> no compensation is required
-   private static final long IO_INTERVAL_NANOS = TimeUnit.MILLISECONDS.toNanos(100);
    private long startOfInterval;
    private long ioPerInterval;
    private final long maxIOperInterval;
+   private final long maxIOCompensationNanos;
 
-   public BestEffortIOLimiter(int iops) {
-      //turn iops in io per interval
-      this.startOfInterval = System.nanoTime() - (IO_INTERVAL_NANOS + 1);
+   public BestEffortIOLimiter(int iops, long maxIOCompensationNanos) {
+      this.maxIOCompensationNanos = maxIOCompensationNanos;
+      this.startOfInterval = System.nanoTime() - (maxIOCompensationNanos + 1);
       this.ioPerInterval = 0L;
       //turn the iops to be interval based
-      this.maxIOperInterval = iops / (TimeUnit.SECONDS.toNanos(1) / IO_INTERVAL_NANOS);
+      this.maxIOperInterval = iops / (TimeUnit.SECONDS.toNanos(1) / maxIOCompensationNanos);
    }
 
    @Override
@@ -46,7 +45,7 @@ final class BestEffortIOLimiter implements IOLimiter {
       final long lastIoTime = this.startOfInterval;
       //do not compensate IO if has passed at least IO_INTERVAL_NANOS from the latest flush
       final long timeBetweenIOs = now - lastIoTime;
-      if (timeBetweenIOs > IO_INTERVAL_NANOS) {
+      if (timeBetweenIOs > this.maxIOCompensationNanos) {
          //record this IO as the last one == the start of a new interval
          this.startOfInterval = now;
          this.ioPerInterval = lastIO;
@@ -64,8 +63,8 @@ final class BestEffortIOLimiter implements IOLimiter {
    }
 
    private long compensateOnIoOverflow(final long now, final long timeBetweenIOs) {
-      final long timeRemainingInPeriod = IO_INTERVAL_NANOS - timeBetweenIOs;
-      LockSupport.parkNanos(timeRemainingInPeriod);
+      final long timeRemainingInPeriod = this.maxIOCompensationNanos - timeBetweenIOs;
+      highResolutionWait(timeRemainingInPeriod);
       final long endCompensation = System.nanoTime();
       //believe that the compensation has taken place even on interruption -> ioPerInterval = 0
       this.startOfInterval = endCompensation;
@@ -73,5 +72,33 @@ final class BestEffortIOLimiter implements IOLimiter {
       //real compensation
       final long compensationTime = endCompensation - now;
       return compensationTime;
+   }
+
+   private static void highResolutionWait(long nanos) {
+      //more than 1 ms -> use park nanos
+      if (nanos > 100_000) {
+         LockSupport.parkNanos(nanos);
+      } else if (nanos > 10_000) {
+         //if >100 us use Thread.yield()
+         yieldWait(nanos);
+      } else {
+         spinWait(nanos);
+      }
+   }
+
+   private static void yieldWait(long nanos) {
+      //if >100 us use Thread.yield()
+      final long deadLine = System.nanoTime() + nanos;
+      while (System.nanoTime() < deadLine) {
+         Thread.yield();
+      }
+   }
+
+   private static void spinWait(long nanos) {
+      //consider if is a good solution or make it configurable
+      final long deadLine = System.nanoTime() + nanos;
+      while (System.nanoTime() < deadLine) {
+         //noop or Thread.onSpinWait() of Java 9
+      }
    }
 }

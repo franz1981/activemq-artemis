@@ -20,7 +20,7 @@ package org.apache.activemq.artemis.core.io.buffer;
 @FunctionalInterface
 interface IOLimiter {
 
-   static IOLimiter UNLIMIT = io -> 0L;
+   IOLimiter UNLIMIT = io -> 0L;
 
    long limit(int lastIO);
 }

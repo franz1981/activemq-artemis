@@ -23,10 +23,12 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
 import io.netty.buffer.Unpooled;
+import org.HdrHistogram.Histogram;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
 import org.apache.activemq.artemis.core.buffers.impl.ChannelBufferWrapper;
@@ -35,6 +37,11 @@ import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 
 public final class TimedBuffer {
+
+   private final Histogram flushes;
+   private final Histogram flushesBytes;
+   private final Histogram compensations;
+
    // Constants -----------------------------------------------------
 
    // Attributes ----------------------------------------------------
@@ -84,6 +91,8 @@ public final class TimedBuffer {
    // no need to be volatile as every access is synchronized
    private boolean spinning = false;
 
+   private final IOLimiter ioLimiter;
+
    // Static --------------------------------------------------------
 
    // Constructors --------------------------------------------------
@@ -91,24 +100,34 @@ public final class TimedBuffer {
    // Public --------------------------------------------------------
 
    public TimedBuffer(final int size, final int timeout, final boolean logRates) {
+      this(size, timeout, logRates, true);
+   }
+
+   public TimedBuffer(final int size, final int timeout, final boolean logRates, boolean ioLimiter) {
       bufferSize = size;
-
       this.logRates = logRates;
-
       if (logRates) {
          logRatesTimer = new Timer(true);
       }
       // Setting the interval for nano-sleeps
       //prefer off heap buffer to allow further humongous allocations and reduce GC overhead
       buffer = new ChannelBufferWrapper(Unpooled.directBuffer(size, size));
-
       buffer.clear();
-
       bufferLimit = 0;
-
       callbacks = null;
-
-      this.timeout = timeout;
+      if (ioLimiter) {
+         final int iops = (1000_000_000 / timeout);
+         //asynchronous flushes need to be limited using a much finer evaluation period and for far less time than synchronous one
+         //making it configurable could be better
+         this.ioLimiter = new BestEffortIOLimiter(iops, TimeUnit.MILLISECONDS.toNanos(1));
+         this.timeout = timeout;
+      } else {
+         this.ioLimiter = IOLimiter.UNLIMIT;
+         this.timeout = timeout;
+      }
+      this.flushes = new Histogram(2_000_000_000L, 2);
+      this.flushesBytes = new Histogram(this.bufferSize, 0);
+      this.compensations = new Histogram(2_000_000_000L, 2);
    }
 
    public synchronized void start() {
@@ -164,6 +183,12 @@ public final class TimedBuffer {
       }
 
       started = false;
+      System.out.println("BYTES:");
+      this.flushesBytes.outputPercentileDistribution(System.out, 1d);
+      System.out.println("FLUSHES:");
+      this.flushes.outputPercentileDistribution(System.out, 1000d);
+      System.out.println("COMPENSATIONS:");
+      this.compensations.outputPercentileDistribution(System.out, 1000d);
    }
 
    public synchronized void setObserver(final TimedBufferObserver observer) {
@@ -185,8 +210,7 @@ public final class TimedBuffer {
       }
 
       if (sizeChecked > bufferSize) {
-         throw new IllegalStateException("Can't write records bigger than the bufferSize(" + bufferSize +
-                                            ") on the journal");
+         throw new IllegalStateException("Can't write records bigger than the bufferSize(" + bufferSize + ") on the journal");
       }
 
       if (bufferLimit == 0 || buffer.writerIndex() + sizeChecked > bufferLimit) {
@@ -227,6 +251,7 @@ public final class TimedBuffer {
       //it doesn't modify the reader index of bytes as in the original version
       final int readableBytes = bytes.readableBytes();
       final int writerIndex = buffer.writerIndex();
+      //TODO measure copy latency!!!
       buffer.setBytes(writerIndex, bytes, bytes.readerIndex(), readableBytes);
       buffer.writerIndex(writerIndex + readableBytes);
 
@@ -248,7 +273,7 @@ public final class TimedBuffer {
       }
 
       delayFlush = false;
-
+      //TODO measure encode latency!!!
       bytes.encode(buffer);
 
       if (callbacks == null) {
@@ -280,16 +305,22 @@ public final class TimedBuffer {
 
          if ((force || !delayFlush) && buffer.writerIndex() > 0) {
             final int pos = buffer.writerIndex();
-
+            //TODO measure allocation latency!!!
             final ByteBuffer bufferToFlush = bufferObserver.newBuffer(bufferSize, pos);
             //bufferObserver::newBuffer doesn't necessary return a buffer with limit == pos or limit == bufferSize!!
             bufferToFlush.limit(pos);
             //perform memcpy under the hood due to the off heap buffer
+            //TODO measure copies latency!!!
             buffer.getBytes(0, bufferToFlush);
-
+            final boolean sync = pendingSyncs.get() > 0;
             final List<IOCallback> ioCallbacks = callbacks == null ? Collections.emptyList() : callbacks;
-            bufferObserver.flushBuffer(bufferToFlush, pendingSyncs.get() > 0, ioCallbacks);
-
+            final long startFlush = System.nanoTime();
+            bufferObserver.flushBuffer(bufferToFlush, sync, ioCallbacks);
+            final long flushTime = System.nanoTime() - startFlush;
+            if (sync) {
+               this.flushes.recordValue(flushTime);
+               this.flushesBytes.recordValue(pos);
+            }
             stopSpin();
 
             pendingSyncs.lazySet(0);
@@ -302,6 +333,10 @@ public final class TimedBuffer {
 
             if (logRates) {
                logFlushed(pos);
+            }
+            if (sync) {
+               final long compensation = ioLimiter.limit(1);
+               this.compensations.recordValue(compensation);
             }
          }
       }
