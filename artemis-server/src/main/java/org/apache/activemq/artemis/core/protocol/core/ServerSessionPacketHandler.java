@@ -132,6 +132,8 @@ import static org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl.SES
 
 public class ServerSessionPacketHandler implements ChannelHandler {
 
+   private static final SimpleString JMS_QUEUE_QUEUE_NAME_PREFIX = SimpleString.toSimpleString("jms.queue.");
+
    private static final Logger logger = Logger.getLogger(ServerSessionPacketHandler.class);
 
    private final ServerSession session;
@@ -268,7 +270,15 @@ public class ServerSessionPacketHandler implements ChannelHandler {
                case CREATE_QUEUE: {
                   CreateQueueMessage request = (CreateQueueMessage) packet;
                   requiresResponse = request.isRequiresResponse();
-                  session.createQueue(request.getAddress(), request.getQueueName(), RoutingType.MULTICAST, request.getFilterString(), request.isTemporary(), request.isDurable());
+                  final SimpleString queueName = request.getQueueName();
+                  final RoutingType routingType;
+                  if (queueName != null && queueName.startsWith(JMS_QUEUE_QUEUE_NAME_PREFIX)) {
+                     routingType = RoutingType.ANYCAST;
+                  } else {
+                     //it covers default + JMS topic: they have address name with prefix = jms.topic.
+                     routingType = RoutingType.MULTICAST;
+                  }
+                  session.createQueue(request.getAddress(), queueName, routingType, request.getFilterString(), request.isTemporary(), request.isDurable());
                   if (requiresResponse) {
                      response = new NullResponseMessage();
                   }
