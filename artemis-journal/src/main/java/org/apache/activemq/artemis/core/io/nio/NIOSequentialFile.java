@@ -55,6 +55,11 @@ public final class NIOSequentialFile extends AbstractSequentialFile {
    }
 
    @Override
+   public boolean canCreateMappedView() {
+      return true;
+   }
+
+   @Override
    public int calculateBlockStart(final int position) {
       return position;
    }

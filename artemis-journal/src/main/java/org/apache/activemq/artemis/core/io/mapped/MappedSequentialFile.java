@@ -64,6 +64,11 @@ final class MappedSequentialFile implements SequentialFile {
       this.criticalErrorListener = criticalErrorListener;
    }
 
+   @Override
+   public boolean canCreateMappedView() {
+      return true;
+   }
+
    private void checkIsOpen() {
       if (!isOpen()) {
          throw new IllegalStateException("File not opened!");

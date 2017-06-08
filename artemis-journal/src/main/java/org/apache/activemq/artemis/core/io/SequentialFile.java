@@ -19,6 +19,9 @@ package org.apache.activemq.artemis.core.io;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.StandardOpenOption;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -26,6 +29,42 @@ import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 
 public interface SequentialFile {
+
+   /**
+    * Returns {@code true} if this {@link SequentialFile} allows creation of Memory Mapped views of its content, {@code false} otherwise.
+    */
+   default boolean canCreateMappedView() {
+      return false;
+   }
+
+   /**
+    * Create a Memory Mapped {@link FileChannel.MapMode#READ_ONLY} view of the {@link File} underlying this {@link SequentialFile}.
+    * Each call create a new {@link MappedByteBuffer} instance and is a duty of the caller to manage its lifecycle
+    * (and the read operations too) in relation of the {@link SequentialFile} source.
+    *
+    * @param position the position in the file where the view will start
+    * @param size     the size in bytes of the view
+    * @return a new {@link FileChannel.MapMode#READ_ONLY} view of this {@link SequentialFile}
+    * @throws IOException                   on any failed file operation
+    * @throws UnsupportedOperationException if {@link #canCreateMappedView} is {@code false}
+    */
+   default MappedByteBuffer createMappedView(int position, int size) throws IOException {
+      if (!canCreateMappedView()) {
+         throw new UnsupportedOperationException("mappedView is not supported!");
+      }
+      final int fileSize;
+      try {
+         fileSize = (int) size();
+      } catch (Exception e) {
+         throw new IllegalStateException(e);
+      }
+      if (position + size > fileSize) {
+         throw new IllegalArgumentException("can't map more than " + fileSize + " bytes!");
+      }
+      try (FileChannel fileChannel = FileChannel.open(getJavaFile().toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)) {
+         return fileChannel.map(FileChannel.MapMode.READ_ONLY, position, size);
+      }
+   }
 
    boolean isOpen();
 

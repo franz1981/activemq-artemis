@@ -16,12 +16,9 @@
  */
 package org.apache.activemq.artemis.core.paging.impl;
 
-import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
-import java.nio.channels.FileChannel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -34,8 +31,6 @@ import org.apache.activemq.artemis.api.core.ICoreMessage;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.mapped.MappedSequentialFileFactory;
-import org.apache.activemq.artemis.core.io.nio.NIOSequentialFileFactory;
 import org.apache.activemq.artemis.core.paging.PagedMessage;
 import org.apache.activemq.artemis.core.paging.cursor.LivePageCache;
 import org.apache.activemq.artemis.core.paging.cursor.PageSubscriptionCounter;
@@ -86,8 +81,6 @@ public final class Page implements Comparable<Page> {
     */
    private Set<PageSubscriptionCounter> pendingCounters;
 
-   private boolean canBeMapped;
-
    public Page(final SimpleString storeName,
                final StorageManager storageManager,
                final SequentialFileFactory factory,
@@ -98,7 +91,6 @@ public final class Page implements Comparable<Page> {
       fileFactory = factory;
       this.storageManager = storageManager;
       this.storeName = storeName;
-      this.canBeMapped = fileFactory instanceof NIOSequentialFileFactory || fileFactory instanceof MappedSequentialFileFactory;
    }
 
    public int getPageId() {
@@ -122,7 +114,7 @@ public final class Page implements Comparable<Page> {
 
       size.lazySet((int) file.size());
 
-      if (this.canBeMapped) {
+      if (this.file.canCreateMappedView()) {
          readFromMapped(storage, messages);
       } else {
          readFromSequentialFile(storage, messages);
@@ -155,19 +147,9 @@ public final class Page implements Comparable<Page> {
       }
    }
 
-   private static MappedByteBuffer mapFileForRead(File file, int fileSize) {
-      try (RandomAccessFile raf = new RandomAccessFile(file, "rw");
-           FileChannel channel = raf.getChannel()) {
-         return channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize);
-      } catch (Exception e) {
-         throw new IllegalStateException(e);
-      }
-   }
-
    private int readFromMapped(StorageManager storage, List<PagedMessage> messages) throws IOException {
       file.position(0);
-      //use a readonly mapped view of the file
-      final MappedByteBuffer mappedByteBuffer = mapFileForRead(this.file.getJavaFile(), size.get());
+      final MappedByteBuffer mappedByteBuffer = this.file.createMappedView(0, size.get());
       try {
          final ActiveMQBuffer fileBuffer = ActiveMQBuffers.wrappedBuffer(mappedByteBuffer);
          fileBuffer.writerIndex(fileBuffer.capacity());
