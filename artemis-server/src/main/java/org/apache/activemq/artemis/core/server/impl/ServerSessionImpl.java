@@ -1295,6 +1295,12 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return send(getCurrentTransaction(), message, direct, noAutoCreateQueue);
    }
 
+   private static void throwActiveMQIOErrorExceptionToFlowControlOnDiskFull(RemotingConnection remotingConnection) throws ActiveMQIOErrorException {
+      final ActiveMQIOErrorException exception = ActiveMQMessageBundle.BUNDLE.diskBeyondLimit();
+      remotingConnection.fail(exception);
+      throw exception;
+   }
+
    @Override
    public synchronized RoutingStatus send(Transaction tx,
                                           final Message message,
@@ -1304,17 +1310,14 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       server.callBrokerPlugins(server.hasBrokerPlugins() ? plugin -> plugin.beforeSend(this, tx, message, direct, noAutoCreateQueue) : null);
 
       // If the protocol doesn't support flow control, we have no choice other than fail the communication
-      if (!this.getRemotingConnection().isSupportsFlowControl() && pagingManager.isDiskFull()) {
-         ActiveMQIOErrorException exception = ActiveMQMessageBundle.BUNDLE.diskBeyondLimit();
-         this.getRemotingConnection().fail(exception);
-         throw exception;
+      if (!this.remotingConnection.isSupportsFlowControl() && pagingManager.isDiskFull()) {
+         throwActiveMQIOErrorExceptionToFlowControlOnDiskFull(this.remotingConnection);
       }
 
-      RoutingStatus result = RoutingStatus.OK;
       //large message may come from StompSession directly, in which
       //case the id header already generated.
       if (!message.isLargeMessage()) {
-         long id = storageManager.generateID();
+         final long id = storageManager.generateID();
          // This will re-encode the message
          message.setMessageID(id);
       }
@@ -1325,35 +1328,35 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
       SimpleString address = message.getAddressSimpleString();
 
+      SimpleString defaultAddress = this.defaultAddress;
       if (defaultAddress == null && address != null) {
-         defaultAddress = address;
-      }
-
-      if (address == null) {
+         this.defaultAddress = address;
+      } else if (address == null) {
          // We don't want to force a re-encode when the message gets sent to the consumer
          message.setAddress(defaultAddress);
+         address = defaultAddress;
       }
 
       if (logger.isTraceEnabled()) {
          logger.trace("send(message=" + message + ", direct=" + direct + ") being called");
       }
 
-      if (message.getAddress() == null) {
+      if (address == null) {
          // This could happen with some tests that are ignoring messages
          throw ActiveMQMessageBundle.BUNDLE.noAddress();
       }
 
-      if (message.getAddressSimpleString().equals(managementAddress)) {
+      final RoutingStatus result;
+      if (address.equals(managementAddress)) {
          // It's a management message
-
          result = handleManagementMessage(tx, message, direct);
       } else {
          result = doSend(tx, message, address, direct, noAutoCreateQueue);
       }
 
-      final RoutingStatus finalResult = result;
-      server.callBrokerPlugins(server.hasBrokerPlugins() ? plugin -> plugin.afterSend(this, tx, message, direct, noAutoCreateQueue, finalResult) : null);
-
+      if (server.hasBrokerPlugins()) {
+         server.callBrokerPlugins(plugin -> plugin.afterSend(this, tx, message, direct, noAutoCreateQueue, result));
+      }
       return result;
    }
 
