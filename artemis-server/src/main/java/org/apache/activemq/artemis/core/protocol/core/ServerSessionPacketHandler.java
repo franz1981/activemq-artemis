@@ -33,7 +33,6 @@ import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.core.exception.ActiveMQXAException;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.persistence.StorageManager;
-import org.apache.activemq.artemis.core.protocol.core.impl.CoreProtocolManager;
 import org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ActiveMQExceptionMessage;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.CreateAddressMessage;
@@ -92,10 +91,10 @@ import org.apache.activemq.artemis.core.server.LargeServerMessage;
 import org.apache.activemq.artemis.core.server.QueueQueryResult;
 import org.apache.activemq.artemis.core.server.ServerSession;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
-import org.apache.activemq.artemis.utils.actors.Actor;
-import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
 import org.apache.activemq.artemis.utils.SimpleFuture;
 import org.apache.activemq.artemis.utils.SimpleFutureImpl;
+import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
+import org.apache.activemq.artemis.utils.actors.loop.AgentSubscription;
 import org.jboss.logging.Logger;
 
 import static org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl.CREATE_ADDRESS;
@@ -148,11 +147,9 @@ public class ServerSessionPacketHandler implements ChannelHandler {
 
    private volatile CoreRemotingConnection remotingConnection;
 
-   private final Actor<Packet> packetActor;
+   private final AgentSubscription<Packet> packetActor;
 
    private final Executor callExecutor;
-
-   private final CoreProtocolManager manager;
 
    // The current currentLargeMessage being processed
    private volatile LargeServerMessage currentLargeMessage;
@@ -160,15 +157,17 @@ public class ServerSessionPacketHandler implements ChannelHandler {
    private final boolean direct;
 
    public ServerSessionPacketHandler(final ActiveMQServer server,
-                                     final CoreProtocolManager manager,
                                      final ServerSession session,
                                      final StorageManager storageManager,
                                      final Channel channel) {
-      this.manager = manager;
-
       this.session = session;
 
-      session.addCloseable((boolean failed) -> clearLargeMessage());
+      this.packetActor = server.packetHandlersAgentManager().registerShared(this::onMessagePacket);
+
+      session.addCloseable((boolean failed) -> {
+         this.packetActor.close();
+         clearLargeMessage();
+      });
 
       this.storageManager = storageManager;
 
@@ -179,9 +178,6 @@ public class ServerSessionPacketHandler implements ChannelHandler {
       Connection conn = remotingConnection.getTransportConnection();
 
       this.callExecutor = server.getExecutorFactory().getExecutor();
-
-      // TODO: I wish I could figure out how to create this through OrderedExecutor
-      this.packetActor = new Actor<>(server.getThreadPool(), this::onMessagePacket);
 
       if (conn instanceof NettyConnection) {
          direct = ((NettyConnection) conn).isDirectDeliver();
@@ -247,7 +243,9 @@ public class ServerSessionPacketHandler implements ChannelHandler {
       channel.confirm(packet);
 
       // This method will call onMessagePacket through an actor
-      packetActor.act(packet);
+      if (!packetActor.trySubmit(packet)) {
+         throw new IllegalStateException("rejected packet: " + packet);
+      }
    }
 
    private void onMessagePacket(final Packet packet) {

@@ -164,11 +164,14 @@ import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.apache.activemq.artemis.utils.ActiveMQThreadPoolExecutor;
 import org.apache.activemq.artemis.utils.CompositeAddress;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
-import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
 import org.apache.activemq.artemis.utils.ReusableLatch;
 import org.apache.activemq.artemis.utils.SecurityFormatter;
 import org.apache.activemq.artemis.utils.TimeUtils;
 import org.apache.activemq.artemis.utils.VersionLoader;
+import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
+import org.apache.activemq.artemis.utils.actors.loop.AgentGroupProcessor;
+import org.apache.activemq.artemis.utils.actors.loop.AgentManager;
+import org.apache.activemq.artemis.utils.actors.loop.BlockingWaitStrategy;
 import org.apache.activemq.artemis.utils.collections.ConcurrentHashSet;
 import org.jboss.logging.Logger;
 
@@ -239,6 +242,8 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    private volatile PostOffice postOffice;
 
    private volatile ExecutorService threadPool;
+
+   private volatile AgentManager packetHandlersAgentManager;
 
    private volatile ScheduledExecutorService scheduledPool;
 
@@ -964,6 +969,10 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       stopComponent(managementService);
       stopComponent(resourceManager);
       stopComponent(postOffice);
+
+      if (this.packetHandlersAgentManager != null) {
+         this.packetHandlersAgentManager.close();
+      }
 
       if (scheduledPool != null && !scheduledPoolSupplied) {
          // we just interrupt all running tasks, these are supposed to be pings and the like.
@@ -2096,6 +2105,14 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          this.scheduledPoolSupplied = true;
          this.scheduledPool = serviceRegistry.getScheduledExecutorService();
       }
+
+      this.packetHandlersAgentManager = new AgentGroupProcessor(new BlockingWaitStrategy());
+      this.ioExecutorPool.execute(this.packetHandlersAgentManager);
+   }
+
+   @Override
+   public AgentManager packetHandlersAgentManager() {
+      return this.packetHandlersAgentManager;
    }
 
    @Override

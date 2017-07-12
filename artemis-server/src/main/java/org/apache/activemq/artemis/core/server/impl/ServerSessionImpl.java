@@ -16,8 +16,10 @@
  */
 package org.apache.activemq.artemis.core.server.impl;
 
-import static org.apache.activemq.artemis.api.core.JsonUtil.nullSafe;
-
+import javax.json.JsonArrayBuilder;
+import javax.json.JsonObjectBuilder;
+import javax.transaction.xa.XAException;
+import javax.transaction.xa.Xid;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -28,11 +30,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-
-import javax.json.JsonArrayBuilder;
-import javax.json.JsonObjectBuilder;
-import javax.transaction.xa.XAException;
-import javax.transaction.xa.Xid;
 
 import org.apache.activemq.artemis.Closeable;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -91,6 +88,8 @@ import org.apache.activemq.artemis.utils.JsonLoader;
 import org.apache.activemq.artemis.utils.PrefixUtil;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
+
+import static org.apache.activemq.artemis.api.core.JsonUtil.nullSafe;
 
 /**
  * Server side Session implementation
@@ -451,7 +450,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       Filter filter = FilterImpl.createFilter(filterString);
 
       server.callBrokerPlugins(server.hasBrokerPlugins() ? plugin -> plugin.beforeCreateConsumer(consumerID, unPrefixedQueueName,
-            filterString, browseOnly, supportLargeMessage) : null);
+                                                                                                 filterString, browseOnly, supportLargeMessage) : null);
 
       ServerConsumer consumer = new ServerConsumerImpl(consumerID, this, (QueueBinding) binding, filter, started, browseOnly, storageManager, callback, preAcknowledge, strictUpdateDeliveryCount, managementService, supportLargeMessage, credits, server);
       consumers.put(consumer.getID(), consumer);
@@ -1295,6 +1294,12 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return send(getCurrentTransaction(), message, direct, noAutoCreateQueue);
    }
 
+   private static void throwActiveMQIOErrorExceptionToFlowControlOnDiskFull(RemotingConnection remotingConnection) throws ActiveMQIOErrorException {
+      final ActiveMQIOErrorException exception = ActiveMQMessageBundle.BUNDLE.diskBeyondLimit();
+      remotingConnection.fail(exception);
+      throw exception;
+   }
+
    @Override
    public synchronized RoutingStatus send(Transaction tx,
                                           final Message message,
@@ -1304,13 +1309,10 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       server.callBrokerPlugins(server.hasBrokerPlugins() ? plugin -> plugin.beforeSend(this, tx, message, direct, noAutoCreateQueue) : null);
 
       // If the protocol doesn't support flow control, we have no choice other than fail the communication
-      if (!this.getRemotingConnection().isSupportsFlowControl() && pagingManager.isDiskFull()) {
-         ActiveMQIOErrorException exception = ActiveMQMessageBundle.BUNDLE.diskBeyondLimit();
-         this.getRemotingConnection().fail(exception);
-         throw exception;
+      if (!this.remotingConnection.isSupportsFlowControl() && pagingManager.isDiskFull()) {
+         throwActiveMQIOErrorExceptionToFlowControlOnDiskFull(this.remotingConnection);
       }
 
-      RoutingStatus result = RoutingStatus.OK;
       //large message may come from StompSession directly, in which
       //case the id header already generated.
       if (!message.isLargeMessage()) {
@@ -1343,6 +1345,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          throw ActiveMQMessageBundle.BUNDLE.noAddress();
       }
 
+      final RoutingStatus result;
       if (message.getAddressSimpleString().equals(managementAddress)) {
          // It's a management message
 
@@ -1356,7 +1359,6 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
       return result;
    }
-
 
    @Override
    public void requestProducerCredits(SimpleString address, final int credits) throws Exception {

@@ -16,6 +16,7 @@
  */
 package org.apache.activemq.artemis.core.server;
 
+import javax.management.MBeanServer;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -23,8 +24,6 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-import javax.management.MBeanServer;
 
 import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
@@ -61,6 +60,7 @@ import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
 import org.apache.activemq.artemis.spi.core.security.ActiveMQSecurityManager;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
+import org.apache.activemq.artemis.utils.actors.loop.AgentManager;
 
 /**
  * This interface defines the internal interface of the ActiveMQ Artemis Server exposed to other components
@@ -69,6 +69,10 @@ import org.apache.activemq.artemis.utils.ExecutorFactory;
  * This is not part of our public API.
  */
 public interface ActiveMQServer extends ServiceComponent {
+
+   default AgentManager packetHandlersAgentManager() {
+      return null;
+   }
 
    /**
     * Sets the server identity.
