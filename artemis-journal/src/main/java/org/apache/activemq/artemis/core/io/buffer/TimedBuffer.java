@@ -24,7 +24,6 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.LockSupport;
 
 import io.netty.buffer.Unpooled;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
@@ -187,8 +186,7 @@ public final class TimedBuffer {
       }
 
       if (sizeChecked > bufferSize) {
-         throw new IllegalStateException("Can't write records bigger than the bufferSize(" + bufferSize +
-                                            ") on the journal");
+         throw new IllegalStateException("Can't write records bigger than the bufferSize(" + bufferSize + ") on the journal");
       }
 
       if (bufferLimit == 0 || buffer.writerIndex() + sizeChecked > bufferLimit) {
@@ -266,45 +264,35 @@ public final class TimedBuffer {
 
    }
 
-   public void flush() {
-      flush(false);
-   }
+   public synchronized void flush() {
+      if (!started) {
+         throw new IllegalStateException("TimedBuffer is not started");
+      }
 
-   /**
-    * force means the Journal is moving to a new file. Any pending write need to be done immediately
-    * or data could be lost
-    */
-   private void flush(final boolean force) {
-      synchronized (this) {
-         if (!started) {
-            throw new IllegalStateException("TimedBuffer is not started");
-         }
+      if (!delayFlush && buffer.writerIndex() > 0) {
+         final int pos = buffer.writerIndex();
 
-         if ((force || !delayFlush) && buffer.writerIndex() > 0) {
-            final int pos = buffer.writerIndex();
+         final ByteBuffer bufferToFlush = bufferObserver.newBuffer(bufferSize, pos);
+         //bufferObserver::newBuffer doesn't necessary return a buffer with limit == pos or limit == bufferSize!!
+         bufferToFlush.limit(pos);
+         //perform memcpy under the hood due to the off heap buffer
+         buffer.getBytes(0, bufferToFlush);
 
-            final ByteBuffer bufferToFlush = bufferObserver.newBuffer(bufferSize, pos);
-            //bufferObserver::newBuffer doesn't necessary return a buffer with limit == pos or limit == bufferSize!!
-            bufferToFlush.limit(pos);
-            //perform memcpy under the hood due to the off heap buffer
-            buffer.getBytes(0, bufferToFlush);
+         final List<IOCallback> ioCallbacks = callbacks == null ? Collections.emptyList() : callbacks;
+         bufferObserver.flushBuffer(bufferToFlush, pendingSyncs.get() > 0, ioCallbacks);
 
-            final List<IOCallback> ioCallbacks = callbacks == null ? Collections.emptyList() : callbacks;
-            bufferObserver.flushBuffer(bufferToFlush, pendingSyncs.get() > 0, ioCallbacks);
+         stopSpin();
 
-            stopSpin();
+         pendingSyncs.lazySet(0);
 
-            pendingSyncs.lazySet(0);
+         callbacks = null;
 
-            callbacks = null;
+         buffer.clear();
 
-            buffer.clear();
+         bufferLimit = 0;
 
-            bufferLimit = 0;
-
-            if (logRates) {
-               logFlushed(pos);
-            }
+         if (logRates) {
+            logFlushed(pos);
          }
       }
    }
@@ -372,14 +360,12 @@ public final class TimedBuffer {
 
       @Override
       public void run() {
-         int waitTimes = 0;
          long lastFlushTime = 0;
          long estimatedOptimalBatch = Runtime.getRuntime().availableProcessors();
          final Semaphore spinLimiter = TimedBuffer.this.spinLimiter;
          final long timeout = TimedBuffer.this.timeout;
 
          while (!closed) {
-            boolean flushed = false;
             final long currentPendingSyncs = pendingSyncs.get();
 
             if (currentPendingSyncs > 0) {
@@ -393,17 +379,18 @@ public final class TimedBuffer {
                         estimatedOptimalBatch = Math.max(estimatedOptimalBatch, currentPendingSyncs);
                      }
                      lastFlushTime = System.nanoTime();
-                     //a flush has been requested
-                     flushed = true;
                   }
                }
             }
 
-            if (flushed) {
-               waitTimes = 0;
-            } else {
-               //instead of interruptible sleeping, perform progressive parks depending on the load
-               waitTimes = TimedBuffer.wait(waitTimes, spinLimiter);
+            try {
+               spinLimiter.acquire();
+
+               Thread.yield();
+
+               spinLimiter.release();
+            } catch (InterruptedException e) {
+               throw new ActiveMQInterruptedException(e);
             }
          }
       }
@@ -413,39 +400,7 @@ public final class TimedBuffer {
       }
    }
 
-   private static int wait(int waitTimes, Semaphore spinLimiter) {
-      if (waitTimes < 10) {
-         //doesn't make sense to spin loop here, because of the lock around flush/addBytes operations!
-         Thread.yield();
-         waitTimes++;
-      } else if (waitTimes < 20) {
-         LockSupport.parkNanos(1L);
-         waitTimes++;
-      } else if (waitTimes < 50) {
-         LockSupport.parkNanos(10L);
-         waitTimes++;
-      } else if (waitTimes < 100) {
-         LockSupport.parkNanos(100L);
-         waitTimes++;
-      } else if (waitTimes < 1000) {
-         LockSupport.parkNanos(1000L);
-         waitTimes++;
-      } else {
-         LockSupport.parkNanos(100_000L);
-         try {
-            spinLimiter.acquire();
-            spinLimiter.release();
-         } catch (InterruptedException e) {
-            throw new ActiveMQInterruptedException(e);
-         }
-      }
-      return waitTimes;
-   }
-
-   /**
-    * Sub classes (tests basically) can use this to override disabling spinning
-    */
-   protected void stopSpin() {
+   private void stopSpin() {
       if (spinning) {
          try {
             // We acquire the spinLimiter semaphore - this prevents the timer flush thread unnecessarily spinning
@@ -459,10 +414,7 @@ public final class TimedBuffer {
       }
    }
 
-   /**
-    * Sub classes (tests basically) can use this to override disabling spinning
-    */
-   protected void startSpin() {
+   private void startSpin() {
       if (!spinning) {
          spinLimiter.release();
 
