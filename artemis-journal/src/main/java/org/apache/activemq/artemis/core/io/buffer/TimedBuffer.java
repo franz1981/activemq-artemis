@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 import io.netty.buffer.Unpooled;
@@ -360,14 +361,13 @@ public final class TimedBuffer {
 
       @Override
       public void run() {
-         long lastFlushTime = 0;
+         long lastFlushTime = System.nanoTime();
          long estimatedOptimalBatch = Runtime.getRuntime().availableProcessors();
          final Semaphore spinLimiter = TimedBuffer.this.spinLimiter;
          final long timeout = TimedBuffer.this.timeout;
 
          while (!closed) {
             final long currentPendingSyncs = pendingSyncs.get();
-
             if (currentPendingSyncs > 0) {
                if (bufferObserver != null) {
                   final boolean checkpoint = System.nanoTime() > lastFlushTime + timeout;
@@ -384,11 +384,26 @@ public final class TimedBuffer {
             }
 
             try {
-               spinLimiter.acquire();
-
-               Thread.yield();
-
-               spinLimiter.release();
+               //to avoid deadlocks due to pending unflushed syncs
+               //it consider a timeout to put a limit to the time while waiting to close a batch
+               if (pendingSyncs.get() > 0) {
+                  //there is some work left here
+                  final long nextCheckpoint = lastFlushTime + timeout;
+                  final long timeToCheckpoint = nextCheckpoint - System.nanoTime();
+                  //if the timeout is already expired, makes sense to merge the current pending syncs
+                  if (timeToCheckpoint > 0) {
+                     //can wait new data or a timeout
+                     if (spinLimiter.tryAcquire(timeToCheckpoint, TimeUnit.NANOSECONDS)) {
+                        Thread.yield();
+                        spinLimiter.release();
+                     }
+                  }
+               } else {
+                  //no work left here: can chill until new data will arrive
+                  spinLimiter.acquire();
+                  Thread.yield();
+                  spinLimiter.release();
+               }
             } catch (InterruptedException e) {
                throw new ActiveMQInterruptedException(e);
             }
