@@ -24,12 +24,13 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.LockSupport;
 
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
@@ -40,13 +41,12 @@ import org.apache.activemq.artemis.core.journal.IOCompletion;
 import org.apache.activemq.artemis.core.journal.Journal;
 import org.apache.activemq.artemis.core.journal.JournalLoadInformation;
 import org.apache.activemq.artemis.core.journal.LoaderCallback;
-import org.apache.activemq.artemis.core.persistence.Persister;
 import org.apache.activemq.artemis.core.journal.PreparedTransactionInfo;
 import org.apache.activemq.artemis.core.journal.RecordInfo;
 import org.apache.activemq.artemis.core.journal.TransactionFailureCallback;
 import org.apache.activemq.artemis.core.journal.impl.JournalFile;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
-import org.apache.activemq.artemis.core.server.ActiveMQScheduledComponent;
+import org.apache.activemq.artemis.core.persistence.Persister;
 import org.apache.activemq.artemis.jdbc.store.drivers.AbstractJDBCDriver;
 import org.apache.activemq.artemis.jdbc.store.sql.SQLProvider;
 import org.jboss.logging.Logger;
@@ -56,11 +56,9 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    private static final Logger logger = Logger.getLogger(JDBCJournalImpl.class);
 
    // Sync Delay in ms
-   private static final int SYNC_DELAY = 5;
-
    private static int USER_VERSION = 1;
 
-   private final List<JDBCJournalRecord> records;
+   private final ArrayBlockingQueue<JDBCJournalRecord> records = new ArrayBlockingQueue<>(1024);
 
    private PreparedStatement insertJournalRecords;
 
@@ -75,8 +73,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    private boolean started;
 
    private AtomicBoolean failed = new AtomicBoolean(false);
-
-   private JDBCJournalSync syncTimer;
 
    private final Executor completeExecutor;
 
@@ -97,7 +93,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
                           Executor completeExecutor,
                           IOCriticalErrorListener criticalIOErrorListener) {
       super(dataSource, provider);
-      records = new ArrayList<>();
       this.scheduledExecutorService = scheduledExecutorService;
       this.completeExecutor = completeExecutor;
       this.criticalIOErrorListener = criticalIOErrorListener;
@@ -110,7 +105,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
                           Executor completeExecutor,
                           IOCriticalErrorListener criticalIOErrorListener) {
       super(sqlProvider, jdbcUrl, jdbcDriverClass);
-      records = new ArrayList<>();
       this.scheduledExecutorService = scheduledExecutorService;
       this.completeExecutor = completeExecutor;
       this.criticalIOErrorListener = criticalIOErrorListener;
@@ -119,8 +113,17 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    @Override
    public void start() throws SQLException {
       super.start();
-      syncTimer = new JDBCJournalSync(scheduledExecutorService, completeExecutor, SYNC_DELAY, TimeUnit.MILLISECONDS, this);
       started = true;
+      scheduledExecutorService.execute(() -> {
+         while (isStarted()) {
+            final int recordsCommitted = sync();
+            if (recordsCommitted == 0) {
+               //burn CPU burn for the sake of gods of speed
+               //TODO create a Condition based version of this naive wait strategy :)
+               LockSupport.parkNanos(1L);
+            }
+         }
+      });
    }
 
    @Override
@@ -162,90 +165,92 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       stop();
    }
 
-   public synchronized int sync() {
+   public int sync() {
 
-      List<JDBCJournalRecord> recordRef;
+      //this one is needed when sync is called in another thread (on stop)
       synchronized (records) {
-         if (records.isEmpty()) {
+         if (records.peek() == null) {
             return 0;
          }
-         recordRef = new ArrayList<>(records);
-         records.clear();
-      }
+         if (!started || failed.get()) {
+            executeCallbacks(new ArrayList<>(records), false);
+            //it could cancel new records too!
+            records.clear();
+            return 0;
+         }
 
-      if (!started || failed.get()) {
-         executeCallbacks(recordRef, false);
-         return 0;
-      }
+         // We keep a list of deleted records and committed tx (used for cleaning up old transaction data).
+         List<Long> deletedRecords = new ArrayList<>();
+         List<Long> committedTransactions = new ArrayList<>();
+         List<JDBCJournalRecord> completedRecords = new ArrayList<>(records.size());
 
+         TransactionHolder holder;
 
-      // We keep a list of deleted records and committed tx (used for cleaning up old transaction data).
-      List<Long> deletedRecords = new ArrayList<>();
-      List<Long> committedTransactions = new ArrayList<>();
+         try {
+            connection.setAutoCommit(false);
 
-      TransactionHolder holder;
+            JDBCJournalRecord record;
 
-      try {
-         connection.setAutoCommit(false);
+            while ((record = records.poll()) != null) {
 
-         for (JDBCJournalRecord record : recordRef) {
+               if (logger.isTraceEnabled()) {
+                  logger.trace("sync::preparing JDBC statement for " + record);
+               }
 
-            if (logger.isTraceEnabled()) {
-               logger.trace("sync::preparing JDBC statement for " + record);
-            }
-
-
-
-            switch (record.getRecordType()) {
-               case JDBCJournalRecord.DELETE_RECORD:
-                  // Standard SQL Delete Record, Non transactional delete
-                  deletedRecords.add(record.getId());
-                  record.writeDeleteRecord(deleteJournalRecords);
-                  break;
-               case JDBCJournalRecord.ROLLBACK_RECORD:
-                  // Roll back we remove all records associated with this TX ID.  This query is always performed last.
-                  deleteJournalTxRecords.setLong(1, record.getTxId());
-                  deleteJournalTxRecords.addBatch();
-                  break;
-               case JDBCJournalRecord.COMMIT_RECORD:
-                  // We perform all the deletes and add the commit record in the same Database TX
-                  holder = transactions.get(record.getTxId());
-                  for (RecordInfo info : holder.recordsToDelete) {
+               switch (record.getRecordType()) {
+                  case JDBCJournalRecord.DELETE_RECORD:
+                     // Standard SQL Delete Record, Non transactional delete
                      deletedRecords.add(record.getId());
-                     deleteJournalRecords.setLong(1, info.id);
-                     deleteJournalRecords.addBatch();
-                  }
-                  record.writeRecord(insertJournalRecords);
-                  committedTransactions.add(record.getTxId());
-                  break;
-               default:
-                  // Default we add a new record to the DB
-                  record.writeRecord(insertJournalRecords);
-                  break;
+                     record.writeDeleteRecord(deleteJournalRecords);
+                     break;
+                  case JDBCJournalRecord.ROLLBACK_RECORD:
+                     // Roll back we remove all records associated with this TX ID.  This query is always performed last.
+                     deleteJournalTxRecords.setLong(1, record.getTxId());
+                     deleteJournalTxRecords.addBatch();
+                     break;
+                  case JDBCJournalRecord.COMMIT_RECORD:
+                     // We perform all the deletes and add the commit record in the same Database TX
+                     holder = transactions.get(record.getTxId());
+                     for (RecordInfo info : holder.recordsToDelete) {
+                        deletedRecords.add(record.getId());
+                        deleteJournalRecords.setLong(1, info.id);
+                        deleteJournalRecords.addBatch();
+                     }
+                     record.writeRecord(insertJournalRecords);
+                     committedTransactions.add(record.getTxId());
+                     break;
+                  default:
+                     // Default we add a new record to the DB
+                     record.writeRecord(insertJournalRecords);
+                     break;
+               }
+               completedRecords.add(record);
             }
+
+            insertJournalRecords.executeBatch();
+            deleteJournalRecords.executeBatch();
+            deleteJournalTxRecords.executeBatch();
+
+            connection.commit();
+            if (logger.isTraceEnabled()) {
+               logger.trace("JDBC commit worked");
+            }
+
+            cleanupTxRecords(deletedRecords, committedTransactions);
+            executeCallbacks(completedRecords, true);
+
+            return completedRecords.size();
+
+         } catch (Exception e) {
+            handleException(completedRecords, e);
+            return 0;
          }
-
-         insertJournalRecords.executeBatch();
-         deleteJournalRecords.executeBatch();
-         deleteJournalTxRecords.executeBatch();
-
-         connection.commit();
-         if (logger.isTraceEnabled()) {
-            logger.trace("JDBC commit worked");
-         }
-
-         cleanupTxRecords(deletedRecords, committedTransactions);
-         executeCallbacks(recordRef, true);
-
-         return recordRef.size();
-
-      } catch (Exception e) {
-         handleException(recordRef, e);
-         return 0;
       }
    }
 
-   /** public for tests only, not through API */
+   /**
+    * public for tests only, not through API
+    */
    public void handleException(List<JDBCJournalRecord> recordRef, Throwable e) {
       logger.warn(e.getMessage(), e);
       failed.set(true);
@@ -304,6 +309,7 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    }
 
    private void executeCallbacks(final List<JDBCJournalRecord> records, final boolean success) {
+      //it is needed? OperationContextImpl mostly allow the completion to be called using an executor too!-> double indirection! -> more latencies
       Runnable r = new Runnable() {
          @Override
          public void run() {
@@ -318,23 +324,23 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       completeExecutor.execute(r);
    }
 
-
    private void checkStatus() {
       checkStatus(null);
    }
 
    private void checkStatus(IOCompletion callback) {
       if (!started) {
-         if (callback != null) callback.onError(-1, "JDBC Journal is not loaded");
+         if (callback != null)
+            callback.onError(-1, "JDBC Journal is not loaded");
          throw new IllegalStateException("JDBCJournal is not loaded");
       }
 
       if (failed.get()) {
-         if (callback != null) callback.onError(-1, "JDBC Journal failed");
+         if (callback != null)
+            callback.onError(-1, "JDBC Journal failed");
          throw new IllegalStateException("JDBCJournal Failed");
       }
    }
-
 
    private void appendRecord(JDBCJournalRecord record) throws Exception {
 
@@ -363,14 +369,12 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          if (record.isTransactional() || record.getRecordType() == JDBCJournalRecord.PREPARE_RECORD) {
             addTxRecord(record);
          }
-
-         synchronized (records) {
-            records.add(record);
-         }
       }
 
-      syncTimer.delay();
-      if (callback != null) callback.waitCompletion();
+      //block until some space is available
+      records.put(record);
+      if (callback != null)
+         callback.waitCompletion();
    }
 
    private synchronized void addTxRecord(JDBCJournalRecord record) {
@@ -409,18 +413,19 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       r.setRecord(record);
       r.setSync(sync);
 
-
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecord bytes[] " + r);
       }
-
-
 
       appendRecord(r);
    }
 
    @Override
-   public void appendAddRecord(long id, byte recordType, Persister persister, Object record, boolean sync) throws Exception {
+   public void appendAddRecord(long id,
+                               byte recordType,
+                               Persister persister,
+                               Object record,
+                               boolean sync) throws Exception {
       JDBCJournalRecord r = new JDBCJournalRecord(id, JDBCJournalRecord.ADD_RECORD, seq.incrementAndGet());
       r.setUserRecordType(recordType);
       r.setRecord(persister, record);
@@ -429,7 +434,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecord (encoding) " + r + " with record = " + record);
       }
-
 
       appendRecord(r);
    }
@@ -453,7 +457,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendAddRecord (completionCallback & encoding) " + r + " with record = " + record);
       }
 
-
       appendRecord(r);
    }
 
@@ -470,12 +473,15 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendUpdateRecord (bytes)) " + r);
       }
 
-
       appendRecord(r);
    }
 
    @Override
-   public void appendUpdateRecord(long id, byte recordType, Persister persister, Object record, boolean sync) throws Exception {
+   public void appendUpdateRecord(long id,
+                                  byte recordType,
+                                  Persister persister,
+                                  Object record,
+                                  boolean sync) throws Exception {
       JDBCJournalRecord r = new JDBCJournalRecord(id, JDBCJournalRecord.UPDATE_RECORD, seq.incrementAndGet());
       r.setUserRecordType(recordType);
       r.setRecord(persister, record);
@@ -484,7 +490,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecord (encoding)) " + r + " with record " + record);
       }
-
 
       appendRecord(r);
    }
@@ -507,7 +512,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecord (encoding & completioncallback)) " + r + " with record " + record);
       }
-
 
       appendRecord(r);
    }
@@ -538,7 +542,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendDeleteRecord id=" + id + " sync=" + sync + " with completionCallback");
       }
 
-
       appendRecord(r);
    }
 
@@ -555,7 +558,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecordTransactional txID=" + txID + " id=" + id + " using bytes[] r=" + r);
       }
-
 
    }
 
@@ -574,7 +576,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendAddRecordTransactional txID=" + txID + " id=" + id + " using encoding=" + record + " and r=" + r);
       }
 
-
       appendRecord(r);
    }
 
@@ -590,7 +591,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecordTransactional txID=" + txID + " id=" + id + " using bytes and r=" + r);
       }
-
 
       appendRecord(r);
    }
@@ -640,7 +640,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendDeleteRecordTransactional txID=" + txID + " id=" + id + " using encoding=" + record + " and r=" + r);
       }
 
-
       appendRecord(r);
    }
 
@@ -669,7 +668,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendCommitRecord txID=" + txID + " sync=" + sync);
       }
-
 
       appendRecord(r);
    }
@@ -723,7 +721,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendPrepareRecord txID=" + txID + " using sync=" + sync);
       }
 
-
       appendRecord(r);
    }
 
@@ -745,7 +742,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendPrepareRecord txID=" + txID + " using callback, sync=" + sync);
       }
 
-
       appendRecord(r);
    }
 
@@ -761,7 +757,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendPrepareRecord txID=" + txID + " transactionData, sync=" + sync);
       }
-
 
       appendRecord(r);
    }
@@ -793,7 +788,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendRollbackRecord txID=" + txID + " sync=" + sync + " using callback");
       }
-
 
       appendRecord(r);
    }
@@ -964,26 +958,5 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    @Override
    public boolean isStarted() {
       return started;
-   }
-
-   private static class JDBCJournalSync extends ActiveMQScheduledComponent {
-
-      private final JDBCJournalImpl journal;
-
-      JDBCJournalSync(ScheduledExecutorService scheduledExecutorService,
-                      Executor executor,
-                      long checkPeriod,
-                      TimeUnit timeUnit,
-                      JDBCJournalImpl journal) {
-         super(scheduledExecutorService, executor, checkPeriod, timeUnit, true);
-         this.journal = journal;
-      }
-
-      @Override
-      public void run() {
-         if (journal.isStarted()) {
-            journal.sync();
-         }
-      }
    }
 }
