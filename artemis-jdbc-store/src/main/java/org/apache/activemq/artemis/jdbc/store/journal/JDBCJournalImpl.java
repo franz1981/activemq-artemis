@@ -30,7 +30,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.LockSupport;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
@@ -83,6 +84,12 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
 
    private final IOCriticalErrorListener criticalIOErrorListener;
 
+   private final ReentrantLock isEmptyLock = new ReentrantLock();
+
+   private final Condition isEmpty = isEmptyLock.newCondition();
+
+   private final AtomicBoolean signalNeeded = new AtomicBoolean(false);
+
    public JDBCJournalImpl(DataSource dataSource,
                           SQLProvider provider,
                           String tableName,
@@ -112,31 +119,36 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       super.start();
       started = true;
       ioExecutor.execute(() -> {
-         final long maxPark = TimeUnit.MILLISECONDS.toNanos(5);
-         int wait = 0;
-         while (isStarted()) {
-            final int recordsCommitted = sync();
-            //progressing park sleep
-            if (recordsCommitted == 0) {
-               if (wait < 10) {
-                  Thread.yield();
-                  wait++;
-               } else if (wait < 1000) {
-                  LockSupport.parkNanos(1L);
-                  wait++;
-               } else {
-                  //deep sleep
-                  LockSupport.parkNanos(maxPark);
-               }
-            } else {
-               wait = 0;
+         while (started) {
+            sync();
+            isEmptyLock.lock();
+            try {
+               signalNeeded.getAndSet(true);
+               isEmpty.await(1, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+               //ignore it and let the started flag be the only capable of stop it
+            } finally {
+               isEmptyLock.unlock();
             }
          }
       });
+      wakeupBatchWriter();
+   }
+
+   private void wakeupBatchWriter() {
+      if (signalNeeded.getAndSet(false)) {
+         isEmptyLock.lock();
+         try {
+            isEmpty.signalAll();
+         } finally {
+            isEmptyLock.unlock();
+         }
+      }
    }
 
    @Override
    public void flush() throws Exception {
+      wakeupBatchWriter();
    }
 
    @Override
@@ -164,6 +176,7 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          if (sync)
             sync();
          started = false;
+         wakeupBatchWriter();
          super.stop();
       }
    }
@@ -260,7 +273,9 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       }
    }
 
-   /** public for tests only, not through API */
+   /**
+    * public for tests only, not through API
+    */
    public void handleException(List<JDBCJournalRecord> recordRef, Throwable e) {
       logger.warn(e.getMessage(), e);
       failed.set(true);
@@ -338,23 +353,23 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       }
    }
 
-
    private void checkStatus() {
       checkStatus(null);
    }
 
    private void checkStatus(IOCompletion callback) {
       if (!started) {
-         if (callback != null) callback.onError(-1, "JDBC Journal is not loaded");
+         if (callback != null)
+            callback.onError(-1, "JDBC Journal is not loaded");
          throw new IllegalStateException("JDBCJournal is not loaded");
       }
 
       if (failed.get()) {
-         if (callback != null) callback.onError(-1, "JDBC Journal failed");
+         if (callback != null)
+            callback.onError(-1, "JDBC Journal failed");
          throw new IllegalStateException("JDBCJournal Failed");
       }
    }
-
 
    private void appendRecord(JDBCJournalRecord record) throws Exception {
 
@@ -383,8 +398,10 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          addTxRecord(record);
       }
       records.put(record);
+      wakeupBatchWriter();
 
-      if (callback != null) callback.waitCompletion();
+      if (callback != null)
+         callback.waitCompletion();
    }
 
    private synchronized void addTxRecord(JDBCJournalRecord record) {
@@ -423,12 +440,9 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       r.setRecord(record);
       r.setSync(sync);
 
-
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecord bytes[] " + r);
       }
-
-
 
       appendRecord(r);
    }
@@ -445,7 +459,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecord (encoding) " + r + " with record = " + record);
       }
-
 
       appendRecord(r);
    }
@@ -468,7 +481,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendAddRecord (completionCallback & encoding) " + r + " with record = " + record);
       }
 
-
       appendRecord(r);
    }
 
@@ -485,7 +497,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendUpdateRecord (bytes)) " + r);
       }
 
-
       appendRecord(r);
    }
 
@@ -501,7 +512,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecord (encoding)) " + r + " with record " + record);
       }
-
 
       appendRecord(r);
    }
@@ -523,7 +533,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecord (encoding & completioncallback)) " + r + " with record " + record);
       }
-
 
       appendRecord(r);
    }
@@ -554,7 +563,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendDeleteRecord id=" + id + " sync=" + sync + " with completionCallback");
       }
 
-
       appendRecord(r);
    }
 
@@ -571,7 +579,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendAddRecordTransactional txID=" + txID + " id=" + id + " using bytes[] r=" + r);
       }
-
 
    }
 
@@ -591,7 +598,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendAddRecordTransactional txID=" + txID + " id=" + id + " using encoding=" + record + " and r=" + r);
       }
 
-
       appendRecord(r);
    }
 
@@ -607,7 +613,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendUpdateRecordTransactional txID=" + txID + " id=" + id + " using bytes and r=" + r);
       }
-
 
       appendRecord(r);
    }
@@ -658,7 +663,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendDeleteRecordTransactional txID=" + txID + " id=" + id + " using encoding=" + record + " and r=" + r);
       }
 
-
       appendRecord(r);
    }
 
@@ -687,7 +691,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendCommitRecord txID=" + txID + " sync=" + sync);
       }
-
 
       appendRecord(r);
    }
@@ -741,7 +744,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendPrepareRecord txID=" + txID + " using sync=" + sync);
       }
 
-
       appendRecord(r);
    }
 
@@ -763,7 +765,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
          logger.trace("appendPrepareRecord txID=" + txID + " using callback, sync=" + sync);
       }
 
-
       appendRecord(r);
    }
 
@@ -779,7 +780,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendPrepareRecord txID=" + txID + " transactionData, sync=" + sync);
       }
-
 
       appendRecord(r);
    }
@@ -811,7 +811,6 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
       if (logger.isTraceEnabled()) {
          logger.trace("appendRollbackRecord txID=" + txID + " sync=" + sync + " using callback");
       }
-
 
       appendRecord(r);
    }
