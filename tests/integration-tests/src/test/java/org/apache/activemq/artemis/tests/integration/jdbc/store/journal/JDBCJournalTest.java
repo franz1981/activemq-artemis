@@ -22,8 +22,6 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
@@ -54,7 +52,7 @@ public class JDBCJournalTest extends ActiveMQTestBase {
 
    private String jdbcUrl;
 
-   private ScheduledExecutorService scheduledExecutorService;
+   private ExecutorService ioExecutorService;
 
    private ExecutorService executorService;
 
@@ -66,8 +64,8 @@ public class JDBCJournalTest extends ActiveMQTestBase {
          DriverManager.getConnection("jdbc:derby:;shutdown=true");
       } catch (Exception ignored) {
       }
-      scheduledExecutorService.shutdown();
-      scheduledExecutorService = null;
+      ioExecutorService.shutdown();
+      ioExecutorService = null;
       executorService.shutdown();
       executorService = null;
 
@@ -75,11 +73,11 @@ public class JDBCJournalTest extends ActiveMQTestBase {
 
    @Before
    public void setup() throws Exception {
-      scheduledExecutorService = new ScheduledThreadPoolExecutor(5);
+      ioExecutorService = Executors.newSingleThreadExecutor();
       executorService = Executors.newSingleThreadExecutor();
       jdbcUrl = "jdbc:derby:target/data;create=true";
       SQLProvider.Factory factory = new DerbySQLProvider.Factory();
-      journal = new JDBCJournalImpl(jdbcUrl, DRIVER_CLASS, factory.create(JOURNAL_TABLE_NAME, SQLProvider.DatabaseStoreType.MESSAGE_JOURNAL), scheduledExecutorService, executorService, new IOCriticalErrorListener() {
+      journal = new JDBCJournalImpl(jdbcUrl, DRIVER_CLASS, factory.create(JOURNAL_TABLE_NAME, SQLProvider.DatabaseStoreType.MESSAGE_JOURNAL), ioExecutorService, executorService, new IOCriticalErrorListener() {
          @Override
          public void onIOException(Throwable code, String message, SequentialFile file) {
 

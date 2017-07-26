@@ -27,7 +27,7 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
@@ -73,7 +73,7 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
 
    private final Executor completeExecutor;
 
-   private final ScheduledExecutorService scheduledExecutorService;
+   private final Executor ioExecutor;
 
    // Track Tx Records
    private Map<Long, TransactionHolder> transactions = new ConcurrentHashMap<>();
@@ -86,11 +86,11 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    public JDBCJournalImpl(DataSource dataSource,
                           SQLProvider provider,
                           String tableName,
-                          ScheduledExecutorService scheduledExecutorService,
+                          Executor ioExecutor,
                           Executor completeExecutor,
                           IOCriticalErrorListener criticalIOErrorListener) {
       super(dataSource, provider);
-      this.scheduledExecutorService = scheduledExecutorService;
+      this.ioExecutor = ioExecutor;
       this.completeExecutor = completeExecutor;
       this.criticalIOErrorListener = criticalIOErrorListener;
    }
@@ -98,11 +98,11 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    public JDBCJournalImpl(String jdbcUrl,
                           String jdbcDriverClass,
                           SQLProvider sqlProvider,
-                          ScheduledExecutorService scheduledExecutorService,
+                          Executor ioExecutor,
                           Executor completeExecutor,
                           IOCriticalErrorListener criticalIOErrorListener) {
       super(sqlProvider, jdbcUrl, jdbcDriverClass);
-      this.scheduledExecutorService = scheduledExecutorService;
+      this.ioExecutor = ioExecutor;
       this.completeExecutor = completeExecutor;
       this.criticalIOErrorListener = criticalIOErrorListener;
    }
@@ -111,13 +111,25 @@ public class JDBCJournalImpl extends AbstractJDBCDriver implements Journal {
    public void start() throws SQLException {
       super.start();
       started = true;
-      scheduledExecutorService.execute(() -> {
+      ioExecutor.execute(() -> {
+         final long maxPark = TimeUnit.MILLISECONDS.toNanos(5);
+         int wait = 0;
          while (isStarted()) {
             final int recordsCommitted = sync();
+            //progressing park sleep
             if (recordsCommitted == 0) {
-               //burn CPU burn for the sake of gods of speed
-               //TODO create a Condition based version of this naive wait strategy :)
-               LockSupport.parkNanos(1L);
+               if (wait < 10) {
+                  Thread.yield();
+                  wait++;
+               } else if (wait < 1000) {
+                  LockSupport.parkNanos(1L);
+                  wait++;
+               } else {
+                  //deep sleep
+                  LockSupport.parkNanos(maxPark);
+               }
+            } else {
+               wait = 0;
             }
          }
       });

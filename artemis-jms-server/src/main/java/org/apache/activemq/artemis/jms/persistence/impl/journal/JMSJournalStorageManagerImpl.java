@@ -108,10 +108,10 @@ public final class JMSJournalStorageManagerImpl implements JMSStorageManager {
             if (sqlProviderFactory == null) {
                sqlProviderFactory = new GenericSQLProvider.Factory();
             }
-            localJMS = new JDBCJournalImpl(dbConf.getDataSource(), sqlProviderFactory.create(dbConf.getJMSBindingsTableName(), SQLProvider.DatabaseStoreType.BINDINGS_JOURNAL), dbConf.getBindingsTableName(), scheduledExecutorService, ioExecutors.getExecutor(), criticalErrorListener);
+            localJMS = new JDBCJournalImpl(dbConf.getDataSource(), sqlProviderFactory.create(dbConf.getJMSBindingsTableName(), SQLProvider.DatabaseStoreType.BINDINGS_JOURNAL), dbConf.getBindingsTableName(), ioExecutors.getExecutor(), ioExecutors.getExecutor(), criticalErrorListener);
          } else {
             String driverClassName = dbConf.getJdbcDriverClassName();
-            localJMS = new JDBCJournalImpl(dbConf.getJdbcConnectionUrl(), driverClassName, JDBCUtils.getSQLProvider(driverClassName, dbConf.getJMSBindingsTableName(), SQLProvider.DatabaseStoreType.BINDINGS_JOURNAL), scheduledExecutorService, ioExecutors.getExecutor(), criticalErrorListener);
+            localJMS = new JDBCJournalImpl(dbConf.getJdbcConnectionUrl(), driverClassName, JDBCUtils.getSQLProvider(driverClassName, dbConf.getJMSBindingsTableName(), SQLProvider.DatabaseStoreType.BINDINGS_JOURNAL), ioExecutors.getExecutor(), ioExecutors.getExecutor(), criticalErrorListener);
          }
          final int networkTimeout = dbConf.getJdbcNetworkTimeout();
          if (networkTimeout >= 0) {
