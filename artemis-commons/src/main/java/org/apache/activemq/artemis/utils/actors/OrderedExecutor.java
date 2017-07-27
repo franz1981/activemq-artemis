@@ -28,7 +28,7 @@ import org.jboss.logging.Logger;
  * More specifically, any call B to the {@link #execute(Runnable)} method that happens-after another call A to the
  * same method, will result in B's task running after A's.
  */
-public class OrderedExecutor extends ProcessorBase<Runnable> implements Executor {
+public final class OrderedExecutor extends ProcessorBase<Runnable> implements Executor {
 
    public OrderedExecutor(Executor delegate) {
       super(delegate);
@@ -37,7 +37,7 @@ public class OrderedExecutor extends ProcessorBase<Runnable> implements Executor
    private static final Logger logger = Logger.getLogger(OrderedExecutor.class);
 
    @Override
-   protected final void doTask(Runnable task) {
+   protected void doTask(Runnable task) {
       try {
          task.run();
       } catch (ActiveMQInterruptedException e) {
@@ -50,13 +50,13 @@ public class OrderedExecutor extends ProcessorBase<Runnable> implements Executor
    }
 
    @Override
-   public final void execute(Runnable run) {
+   public void execute(Runnable run) {
       task(run);
    }
 
    @Override
    public String toString() {
-      return "OrderedExecutor(tasks=" + tasks + ")";
+      return "OrderedExecutor(tasks=" + tasks.size() + ")";
    }
 
 }

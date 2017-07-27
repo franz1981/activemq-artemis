@@ -18,22 +18,23 @@
 package org.apache.activemq.artemis.utils.actors;
 
 import java.util.concurrent.Executor;
+import java.util.function.Consumer;
 
-public class Actor<T> extends ProcessorBase<T> {
+public final class Actor<T> extends ProcessorBase<T> {
 
-   private final ActorListener<T> listener;
+   private final Consumer<? super T> listener;
 
-   public Actor(Executor parent, ActorListener<T> listener) {
+   public Actor(Executor parent, Consumer<? super T> listener) {
       super(parent);
       this.listener = listener;
    }
 
    @Override
-   protected final void doTask(T task) {
-      listener.onMessage(task);
+   protected void doTask(T task) {
+      listener.accept(task);
    }
 
-   public final void act(T message) {
+   public void act(T message) {
       task(message);
    }
 

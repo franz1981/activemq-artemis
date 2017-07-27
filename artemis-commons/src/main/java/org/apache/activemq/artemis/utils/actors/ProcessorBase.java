@@ -17,18 +17,21 @@
 
 package org.apache.activemq.artemis.utils.actors;
 
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
-public abstract class ProcessorBase<T> {
+import org.jctools.queues.MpscChunkedArrayQueue;
+import org.jctools.util.Pow2;
+
+abstract class ProcessorBase<T> {
+
+   private static final int ACTOR_MIN_CAPACITY = Integer.getInteger("processor.min.capacity", 1024);
 
    private static final int STATE_NOT_RUNNING = 0;
    private static final int STATE_RUNNING = 1;
 
-   protected final Queue<T> tasks = new ConcurrentLinkedQueue<>();
+   protected final MpscChunkedArrayQueue<T> tasks = new MpscChunkedArrayQueue<>(ACTOR_MIN_CAPACITY, Pow2.MAX_POW2);
 
    private final Executor delegate;
 
@@ -44,31 +47,29 @@ public abstract class ProcessorBase<T> {
 
       @Override
       public void run() {
-         do {
+         //we loop again based on tasks not being empty. Otherwise there is a window where the state is running,
+         //but poll() has returned null, so a submitting thread will believe that it does not need re-execute.
+         //this check fixes the issue
+         while (!tasks.isEmpty()) {
             //if there is no thread active then we run
             if (stateUpdater.compareAndSet(ProcessorBase.this, STATE_NOT_RUNNING, STATE_RUNNING)) {
-               T task = tasks.poll();
+               T task;
                //while the queue is not empty we process in order
-               while (task != null) {
+               while ((task = tasks.poll()) != null) {
                   doTask(task);
-                  task = tasks.poll();
                }
                //set state back to not running.
                stateUpdater.set(ProcessorBase.this, STATE_NOT_RUNNING);
             } else {
                return;
             }
-            //we loop again based on tasks not being empty. Otherwise there is a window where the state is running,
-            //but poll() has returned null, so a submitting thread will believe that it does not need re-execute.
-            //this check fixes the issue
          }
-         while (!tasks.isEmpty());
       }
    }
 
    protected abstract void doTask(T task);
 
-   public ProcessorBase(Executor parent) {
+   ProcessorBase(Executor parent) {
       this.delegate = parent;
    }
 
@@ -100,12 +101,20 @@ public abstract class ProcessorBase<T> {
       return stateUpdater.get(this) == STATE_NOT_RUNNING;
    }
 
-   protected void task(T command) {
+   public final int pendingTasks() {
+      return this.tasks.size();
+   }
+
+   public final int capacity() {
+      return this.tasks.capacity();
+   }
+
+   protected final void task(T command) {
       tasks.add(command);
       startPoller();
    }
 
-   protected void startPoller() {
+   private void startPoller() {
       if (stateUpdater.get(this) == STATE_NOT_RUNNING) {
          //note that this can result in multiple tasks being queued
          //this is not an issue as the CAS will mean that the second (and subsequent) execution is ignored
