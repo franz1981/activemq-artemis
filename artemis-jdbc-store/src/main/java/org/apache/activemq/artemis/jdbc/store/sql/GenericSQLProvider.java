@@ -57,6 +57,42 @@ public class GenericSQLProvider implements SQLProvider {
 
    private final String countJournalRecordsSQL;
 
+   private final String createNodeManagerStoreTableSQL;
+
+   private final String insertStateOnNodeManagerStoreTableSQL;
+
+   private final String insertNodeIdOnNodeManagerStoreTableSQL;
+
+   private final String insertLiveLockOnNodeManagerStoreTableSQL;
+
+   private final String insertBackupLockOnNodeManagerStoreTableSQL;
+
+   private final String tryLiveLockOnNodeManagerStoreTableSQL;
+
+   private final String tryBackupLockOnNodeManagerStoreTableSQL;
+
+   private final String tryReleaseLiveLockOnNodeManagerStoreTableSQL;
+
+   private final String tryReleaseBackupLockOnNodeManagerStoreTableSQL;
+
+   private final String isLiveLockedOnNodeManagerStoreTableSQL;
+
+   private final String isBackupLockedOnNodeManagerStoreTableSQL;
+
+   private final String renewLiveLockOnNodeManagerStoreTableSQL;
+
+   private final String renewBackupLockOnNodeManagerStoreTableSQL;
+
+   private final String currentTimestampOnNodeManagerStoreTableSQL;
+
+   private final String updateStateOnNodeManagerStoreTableSQL;
+
+   private final String selectStateOnNodeManagerStoreTableSQL;
+
+   private final String updateNodeIdOnNodeManagerStoreTableSQL;
+
+   private final String selectNodeIdOnNodeManagerStoreTableSQL;
+
    protected final DatabaseStoreType databaseStoreType;
 
    protected GenericSQLProvider(String tableName, DatabaseStoreType databaseStoreType) {
@@ -64,8 +100,7 @@ public class GenericSQLProvider implements SQLProvider {
 
       this.databaseStoreType = databaseStoreType;
 
-      createFileTableSQL = "CREATE TABLE " + tableName +
-         "(ID BIGINT AUTO_INCREMENT, FILENAME VARCHAR(255), EXTENSION VARCHAR(10), DATA BLOB, PRIMARY KEY(ID))";
+      createFileTableSQL = "CREATE TABLE " + tableName + "(ID BIGINT AUTO_INCREMENT, FILENAME VARCHAR(255), EXTENSION VARCHAR(10), DATA BLOB, PRIMARY KEY(ID))";
 
       insertFileSQL = "INSERT INTO " + tableName + " (FILENAME, EXTENSION, DATA) VALUES (?,?,?)";
 
@@ -81,17 +116,13 @@ public class GenericSQLProvider implements SQLProvider {
 
       updateFileNameByIdSQL = "UPDATE " + tableName + " SET FILENAME=? WHERE ID=?";
 
-      cloneFileRecordSQL = "INSERT INTO " + tableName + "(FILENAME, EXTENSION, DATA) " +
-         "(SELECT FILENAME, EXTENSION, DATA FROM " + tableName + " WHERE ID=?)";
+      cloneFileRecordSQL = "INSERT INTO " + tableName + "(FILENAME, EXTENSION, DATA) " + "(SELECT FILENAME, EXTENSION, DATA FROM " + tableName + " WHERE ID=?)";
 
       copyFileRecordByIdSQL = "UPDATE " + tableName + " SET DATA = (SELECT DATA FROM " + tableName + " WHERE ID=?) WHERE ID=?";
 
       dropFileTableSQL = "DROP TABLE " + tableName;
 
-      createJournalTableSQL = new String[] {
-         "CREATE TABLE " + tableName + "(id BIGINT,recordType SMALLINT,compactCount SMALLINT,txId BIGINT,userRecordType SMALLINT,variableSize INTEGER,record BLOB,txDataSize INTEGER,txData BLOB,txCheckNoRecords INTEGER,seq BIGINT NOT NULL, PRIMARY KEY(seq))",
-         "CREATE INDEX " + tableName + "_IDX ON " + tableName + " (id)"
-      };
+      createJournalTableSQL = new String[]{"CREATE TABLE " + tableName + "(id BIGINT,recordType SMALLINT,compactCount SMALLINT,txId BIGINT,userRecordType SMALLINT,variableSize INTEGER,record BLOB,txDataSize INTEGER,txData BLOB,txCheckNoRecords INTEGER,seq BIGINT NOT NULL, PRIMARY KEY(seq))", "CREATE INDEX " + tableName + "_IDX ON " + tableName + " (id)"};
 
       insertJournalRecordsSQL = "INSERT INTO " + tableName + "(id,recordType,compactCount,txId,userRecordType,variableSize,record,txDataSize,txData,txCheckNoRecords,seq) " + "VALUES (?,?,?,?,?,?,?,?,?,?,?)";
 
@@ -102,6 +133,43 @@ public class GenericSQLProvider implements SQLProvider {
       deleteJournalTxRecordsSQL = "DELETE FROM " + tableName + " WHERE txId=?";
 
       countJournalRecordsSQL = "SELECT COUNT(*) FROM " + tableName;
+
+      createNodeManagerStoreTableSQL = "CREATE TABLE " + tableName + " ( ID INT NOT NULL, HOLDER_ID VARCHAR(128), HOLDER_EXPIRATION_TIME TIMESTAMP, NODE_ID CHAR(36),STATE CHAR(1), PRIMARY KEY(ID))";
+
+      insertStateOnNodeManagerStoreTableSQL = "INSERT INTO " + tableName + " (ID) VALUES (0)";
+
+      insertNodeIdOnNodeManagerStoreTableSQL = "INSERT INTO " + tableName + " (ID) VALUES (3)";
+
+      insertLiveLockOnNodeManagerStoreTableSQL = "INSERT INTO " + tableName + " (ID) VALUES (1)";
+
+      insertBackupLockOnNodeManagerStoreTableSQL = "INSERT INTO " + tableName + " (ID) VALUES (2)";
+
+      tryLiveLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_ID = ?, HOLDER_EXPIRATION_TIME = ? WHERE (HOLDER_EXPIRATION_TIME IS NULL OR HOLDER_EXPIRATION_TIME < CURRENT_TIMESTAMP) AND ID = 1";
+
+      tryBackupLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_ID = ?, HOLDER_EXPIRATION_TIME = ? WHERE (HOLDER_EXPIRATION_TIME IS NULL OR HOLDER_EXPIRATION_TIME < CURRENT_TIMESTAMP) AND ID = 2";
+
+      tryReleaseLiveLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_ID = NULL, HOLDER_EXPIRATION_TIME = NULL WHERE HOLDER_ID = ? AND ID = 1";
+
+      tryReleaseBackupLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_ID = NULL, HOLDER_EXPIRATION_TIME = NULL WHERE HOLDER_ID = ? AND ID = 2";
+
+      isLiveLockedOnNodeManagerStoreTableSQL = "SELECT HOLDER_ID, HOLDER_EXPIRATION_TIME FROM " + tableName + " WHERE ID = 1";
+
+      isBackupLockedOnNodeManagerStoreTableSQL = "SELECT HOLDER_ID, HOLDER_EXPIRATION_TIME FROM " + tableName + " WHERE ID = 2";
+
+      renewLiveLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_EXPIRATION_TIME = ? WHERE HOLDER_ID = ? AND ID = 1";
+
+      renewBackupLockOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET HOLDER_EXPIRATION_TIME = ? WHERE HOLDER_ID = ? AND ID = 2";
+
+      currentTimestampOnNodeManagerStoreTableSQL = "SELECT CURRENT_TIMESTAMP FROM " + tableName;
+
+      updateStateOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET STATE = ? WHERE ID = 0";
+
+      selectStateOnNodeManagerStoreTableSQL = "SELECT STATE FROM " + tableName + " WHERE ID = 0";
+
+      updateNodeIdOnNodeManagerStoreTableSQL = "UPDATE " + tableName + " SET NODE_ID = ? WHERE ID = 3";
+
+      selectNodeIdOnNodeManagerStoreTableSQL = "SELECT NODE_ID FROM " + tableName + " WHERE ID = 3";
+
    }
 
    @Override
@@ -199,6 +267,96 @@ public class GenericSQLProvider implements SQLProvider {
    @Override
    public String getDropFileTableSQL() {
       return dropFileTableSQL;
+   }
+
+   @Override
+   public String createNodeManagerStoreTable() {
+      return createNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String insertStateOnNodeManagerStoreTable() {
+      return insertStateOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String insertNodeIdOnNodeManagerStoreTable() {
+      return insertNodeIdOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String insertLiveLockOnNodeManagerStoreTable() {
+      return insertLiveLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String insertBackupLockOnNodeManagerStoreTable() {
+      return insertBackupLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String tryLiveLockOnNodeManagerStoreTable() {
+      return tryLiveLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String tryBackupLockOnNodeManagerStoreTable() {
+      return tryBackupLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String tryReleaseLiveLockOnNodeManagerStoreTable() {
+      return tryReleaseLiveLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String tryReleaseBackupLockOnNodeManagerStoreTable() {
+      return tryReleaseBackupLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String isLiveLockedOnNodeManagerStoreTable() {
+      return isLiveLockedOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String isBackupLockedOnNodeManagerStoreTable() {
+      return isBackupLockedOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String renewLiveLockOnNodeManagerStoreTable() {
+      return renewLiveLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String renewBackupLockOnNodeManagerStoreTable() {
+      return renewBackupLockOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String currentTimestampOnNodeManagerStoreTable() {
+      return currentTimestampOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String updateStateOnNodeManagerStoreTable() {
+      return updateStateOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String selectStateOnNodeManagerStoreTable() {
+      return selectStateOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String updateNodeIdOnNodeManagerStoreTable() {
+      return updateNodeIdOnNodeManagerStoreTableSQL;
+   }
+
+   @Override
+   public String selectNodeIdOnNodeManagerStoreTable() {
+      return selectNodeIdOnNodeManagerStoreTableSQL;
    }
 
    @Override
