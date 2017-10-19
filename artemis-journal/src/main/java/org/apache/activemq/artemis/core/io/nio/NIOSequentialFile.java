@@ -22,7 +22,6 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -33,11 +32,11 @@ import org.apache.activemq.artemis.core.io.AbstractSequentialFile;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
+import org.apache.activemq.artemis.core.io.TransferableSequentialFile;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
-import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 import org.apache.activemq.artemis.utils.Env;
 
-public final class NIOSequentialFile extends AbstractSequentialFile {
+public final class NIOSequentialFile extends AbstractSequentialFile implements TransferableSequentialFile {
 
    private FileChannel channel;
 
@@ -52,6 +51,11 @@ public final class NIOSequentialFile extends AbstractSequentialFile {
                             final Executor writerExecutor) {
       super(directory, file, factory, writerExecutor);
       this.maxIO = maxIO;
+   }
+
+   @Override
+   public FileChannel channel() {
+      return this.channel;
    }
 
    @Override
@@ -310,38 +314,6 @@ public final class NIOSequentialFile extends AbstractSequentialFile {
       } finally {
          //release it to recycle the write buffer if big enough
          this.factory.releaseBuffer(bytes);
-      }
-   }
-
-   @Override
-   public void copyTo(SequentialFile dstFile) throws IOException {
-      if (ActiveMQJournalLogger.LOGGER.isDebugEnabled()) {
-         ActiveMQJournalLogger.LOGGER.debug("Copying " + this + " as " + dstFile);
-      }
-      if (isOpen()) {
-         throw new IllegalStateException("File opened!");
-      }
-      if (dstFile.isOpen()) {
-         throw new IllegalArgumentException("dstFile must be closed too");
-      }
-      try (RandomAccessFile src = new RandomAccessFile(getFile(), "rw");
-           FileChannel srcChannel = src.getChannel();
-           FileLock srcLock = srcChannel.lock()) {
-         final long readableBytes = srcChannel.size();
-         if (readableBytes > 0) {
-            try (RandomAccessFile dst = new RandomAccessFile(dstFile.getJavaFile(), "rw");
-                 FileChannel dstChannel = dst.getChannel();
-                 FileLock dstLock = dstChannel.lock()) {
-               final long oldLength = dst.length();
-               final long newLength = oldLength + readableBytes;
-               dst.setLength(newLength);
-               final long transferred = dstChannel.transferFrom(srcChannel, oldLength, readableBytes);
-               if (transferred != readableBytes) {
-                  dstChannel.truncate(oldLength);
-                  throw new IOException("copied less then expected");
-               }
-            }
-         }
       }
    }
 }

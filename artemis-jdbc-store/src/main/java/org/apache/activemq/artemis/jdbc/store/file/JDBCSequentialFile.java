@@ -31,6 +31,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
+import org.apache.activemq.artemis.core.io.SequentialFileFactory;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
@@ -310,7 +311,12 @@ public class JDBCSequentialFile implements SequentialFile {
    }
 
    @Override
-   public long size() throws Exception {
+   public SequentialFileFactory factory() {
+      return fileFactory;
+   }
+
+   @Override
+   public long size() throws IOException {
       load();
       return writePosition;
    }

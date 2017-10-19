@@ -19,13 +19,24 @@ package org.apache.activemq.artemis.core.io;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.util.FileIOUtil;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
+import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 
 public interface SequentialFile {
+
+   /**
+    * It is the maximum {@link #size()} allowed for this file.
+    */
+   default long capacity() {
+      return Long.MAX_VALUE;
+   }
 
    boolean isOpen();
 
@@ -97,8 +108,10 @@ public interface SequentialFile {
 
    void close() throws Exception;
 
-   /** When closing a file from a finalize block, you cant wait on syncs or anything like that.
-    *  otherwise the VM may hung. Especially on the testsuite. */
+   /**
+    * When closing a file from a finalize block, you cant wait on syncs or anything like that.
+    * otherwise the VM may hung. Especially on the testsuite.
+    */
    default void close(boolean waitSync) throws Exception {
       // by default most implementations are just using the regular close..
       // if the close needs sync, please use this parameter or fianlizations may get stuck
@@ -107,13 +120,39 @@ public interface SequentialFile {
 
    void sync() throws IOException;
 
-   long size() throws Exception;
+   long size() throws IOException;
 
    void renameTo(String newFileName) throws Exception;
 
    SequentialFile cloneFile();
 
-   void copyTo(SequentialFile newFileName) throws Exception;
+   SequentialFileFactory factory();
+
+   default void copyTo(SequentialFile newFileName) throws Exception {
+      try {
+         if (ActiveMQJournalLogger.LOGGER.isDebugEnabled()) {
+            ActiveMQJournalLogger.LOGGER.debug("Copying " + this + " as " + newFileName);
+         }
+         if (!newFileName.isOpen()) {
+            newFileName.open();
+         }
+
+         if (!isOpen()) {
+            this.open();
+         }
+
+         ByteBuffer buffer = ByteBuffer.allocate(10 * 1024);
+
+         FileIOUtil.copyData(this, newFileName, buffer);
+         newFileName.close();
+         this.close();
+      } catch (ClosedChannelException e) {
+         throw e;
+      } catch (IOException e) {
+         factory().onIOError(new ActiveMQIOErrorException(e.getMessage(), e), e.getMessage(), this);
+         throw e;
+      }
+   }
 
    void setTimedBuffer(TimedBuffer buffer);
 

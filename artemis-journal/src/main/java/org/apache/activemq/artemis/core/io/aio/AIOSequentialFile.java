@@ -294,7 +294,7 @@ public class AIOSequentialFile extends AbstractSequentialFile {
    }
 
    @Override
-   public long size() throws Exception {
+   public long size() throws IOException {
       if (aioFile == null) {
          return getFile().length();
       } else {

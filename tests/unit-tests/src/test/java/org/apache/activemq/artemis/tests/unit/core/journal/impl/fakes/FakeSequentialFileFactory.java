@@ -425,7 +425,12 @@ public class FakeSequentialFileFactory implements SequentialFileFactory {
       }
 
       @Override
-      public long size() throws Exception {
+      public SequentialFileFactory factory() {
+         return FakeSequentialFileFactory.this;
+      }
+
+      @Override
+      public long size() throws IOException {
          if (data == null) {
             return 0;
          } else {

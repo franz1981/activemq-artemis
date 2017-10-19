@@ -31,8 +31,9 @@ public class FileIOUtil {
       boolean fromIsOpen = from.isOpen();
       boolean toIsOpen = to.isOpen();
 
-      from.close();
-      from.open();
+      if (!fromIsOpen) {
+         from.open();
+      }
 
       if (!toIsOpen) {
          to.open();

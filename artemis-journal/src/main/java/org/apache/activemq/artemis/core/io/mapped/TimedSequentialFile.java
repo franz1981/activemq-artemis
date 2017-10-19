@@ -199,7 +199,12 @@ final class TimedSequentialFile implements SequentialFile {
    }
 
    @Override
-   public long size() throws Exception {
+   public SequentialFileFactory factory() {
+      return this.sequentialFile.factory();
+   }
+
+   @Override
+   public long size() throws IOException {
       return this.sequentialFile.size();
    }
 

@@ -18,10 +18,8 @@ package org.apache.activemq.artemis.core.io.mapped;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.channels.FileLock;
 
 import io.netty.buffer.ByteBuf;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
@@ -29,13 +27,14 @@ import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
-import org.apache.activemq.artemis.core.io.SequentialFile;
+import org.apache.activemq.artemis.core.io.SequentialFileFactory;
+import org.apache.activemq.artemis.core.io.TransferableSequentialFile;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 
-final class MappedSequentialFile implements SequentialFile {
+final class MappedSequentialFile implements TransferableSequentialFile {
 
    private final File directory;
    private final IOCriticalErrorListener criticalErrorListener;
@@ -61,11 +60,26 @@ final class MappedSequentialFile implements SequentialFile {
       this.criticalErrorListener = criticalErrorListener;
    }
 
+   @Override
+   public FileChannel channel() {
+      if (this.mappedFile == null) {
+         return null;
+      } else {
+         return this.mappedFile.channel();
+      }
+   }
+
+   @Override
+   public SequentialFileFactory factory() {
+      return factory;
+   }
+
    public MappedFile mappedFile() {
       return mappedFile;
    }
 
-   public int capacity() {
+   @Override
+   public long capacity() {
       return this.capacity;
    }
 
@@ -391,29 +405,6 @@ final class MappedSequentialFile implements SequentialFile {
    public MappedSequentialFile cloneFile() {
       checkIsNotOpen();
       return new MappedSequentialFile(this.factory, this.directory, this.file, this.capacity, this.criticalErrorListener);
-   }
-
-   @Override
-   public void copyTo(SequentialFile dstFile) throws IOException {
-      checkIsNotOpen();
-      if (dstFile.isOpen()) {
-         throw new IllegalArgumentException("dstFile must be closed too");
-      }
-      try (RandomAccessFile src = new RandomAccessFile(file, "rw"); FileChannel srcChannel = src.getChannel(); FileLock srcLock = srcChannel.lock()) {
-         final long readableBytes = srcChannel.size();
-         if (readableBytes > 0) {
-            try (RandomAccessFile dst = new RandomAccessFile(dstFile.getJavaFile(), "rw"); FileChannel dstChannel = dst.getChannel(); FileLock dstLock = dstChannel.lock()) {
-               final long oldLength = dst.length();
-               final long newLength = oldLength + readableBytes;
-               dst.setLength(newLength);
-               final long transferred = dstChannel.transferFrom(srcChannel, oldLength, readableBytes);
-               if (transferred != readableBytes) {
-                  dstChannel.truncate(oldLength);
-                  throw new IOException("copied less then expected");
-               }
-            }
-         }
-      }
    }
 
    @Override

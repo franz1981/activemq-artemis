@@ -30,7 +30,6 @@ import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.io.buffer.TimedBufferObserver;
-import org.apache.activemq.artemis.core.io.util.FileIOUtil;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
@@ -73,6 +72,11 @@ public abstract class AbstractSequentialFile implements SequentialFile {
       this.factory = factory;
    }
 
+   @Override
+   public SequentialFileFactory factory() {
+      return factory;
+   }
+
    // Public --------------------------------------------------------
 
    @Override
@@ -93,31 +97,6 @@ public abstract class AbstractSequentialFile implements SequentialFile {
 
       if (file.exists() && !file.delete()) {
          ActiveMQJournalLogger.LOGGER.errorDeletingFile(this);
-      }
-   }
-
-   @Override
-   public void copyTo(SequentialFile newFileName) throws Exception {
-      try {
-         ActiveMQJournalLogger.LOGGER.debug("Copying " + this + " as " + newFileName);
-         if (!newFileName.isOpen()) {
-            newFileName.open();
-         }
-
-         if (!isOpen()) {
-            this.open();
-         }
-
-         ByteBuffer buffer = ByteBuffer.allocate(10 * 1024);
-
-         FileIOUtil.copyData(this, newFileName, buffer);
-         newFileName.close();
-         this.close();
-      } catch (ClosedChannelException e) {
-         throw e;
-      } catch (IOException e) {
-         factory.onIOError(new ActiveMQIOErrorException(e.getMessage(), e), e.getMessage(), this);
-         throw e;
       }
    }
 
