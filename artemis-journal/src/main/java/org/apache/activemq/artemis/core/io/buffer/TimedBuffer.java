@@ -35,23 +35,7 @@ import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 
 public final class TimedBuffer {
 
-   /**
-    * Property name to set the percentage of error allowed while expiring the flush {@code timeout} to happen:
-    * it can assume any positive value from {@code 0} to {@link Integer#MAX_VALUE}.
-    * <p>
-    * By default it is {@link #DEFAULT_TIMEOUT_ERROR_PERCENTAGE} more than the configured {@code timeout}.
-    */
-   public static final String JOURNAL_TIMEOUT_ERROR_PROPERTY_NAME = "journal.timeout.error";
-   public static final int DEFAULT_TIMEOUT_ERROR_PERCENTAGE = 50;
-   private static final double MAX_TIMEOUT_ERROR;
-
-   static {
-      final int errorPercentage = Integer.getInteger(JOURNAL_TIMEOUT_ERROR_PROPERTY_NAME, DEFAULT_TIMEOUT_ERROR_PERCENTAGE);
-      if (errorPercentage < 0) {
-         throw new RuntimeException("The sleep error percentage must be >= 0");
-      }
-      MAX_TIMEOUT_ERROR = 1 + (errorPercentage / 100);
-   }
+   private static final double MAX_TIMEOUT_ERROR_FACTOR = 0.5;
 
    // Constants -----------------------------------------------------
 
@@ -139,7 +123,7 @@ public final class TimedBuffer {
 
       this.timeout = timeout;
 
-      this.timeoutLimit = Math.round(this.timeout * MAX_TIMEOUT_ERROR);
+      this.timeoutLimit = Math.round(this.timeout * (1 + MAX_TIMEOUT_ERROR_FACTOR));
    }
 
    public synchronized void start() {
@@ -414,6 +398,11 @@ public final class TimedBuffer {
                   if (flushBatch()) {
                      //it could wait until the timeout is expired
                      final long timeFromTheLastFlush = System.nanoTime() - lastFlushTime;
+
+                     // example: Say the device took 20% of the time to write..
+                     //          We only need to wait 80% more..
+                     //          timeFromTheLastFlush would be the difference
+                     //          And if the device took more than that time, there's no need to wait at all.
                      final long timeToSleep = timeout - timeFromTheLastFlush;
                      if (timeToSleep > 0) {
                         useSleep = sleepIfPossible(timeToSleep);
@@ -449,7 +438,7 @@ public final class TimedBuffer {
             final long startSleep = System.nanoTime();
             sleep(nanosToSleep);
             final long elapsedSleep = System.nanoTime() - startSleep;
-            if (checks < MAX_CHECKS_ON_SLEEP) {
+            if (checks < MAX_CHECKS_ON_SLEEP && nanosToSleep > timeout * MAX_TIMEOUT_ERROR_FACTOR) {
                // I'm letting the real time to be up to DEFAULT_TIMEOUT_ERROR_PERCENTAGE% than the specified timeout.
                final long sleepError = elapsedSleep - nanosToSleep;
                // I've slept too much?
