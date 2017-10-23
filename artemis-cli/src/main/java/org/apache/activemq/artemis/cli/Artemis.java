@@ -52,6 +52,7 @@ import org.apache.activemq.artemis.cli.commands.tools.journal.CompactJournal;
 import org.apache.activemq.artemis.cli.commands.tools.journal.DecodeJournal;
 import org.apache.activemq.artemis.cli.commands.tools.journal.EncodeJournal;
 import org.apache.activemq.artemis.cli.commands.tools.journal.PerfJournal;
+import org.apache.activemq.artemis.cli.commands.tools.journal.StatJournal;
 import org.apache.activemq.artemis.cli.commands.tools.xml.XmlDataExporter;
 import org.apache.activemq.artemis.cli.commands.tools.xml.XmlDataImporter;
 import org.apache.activemq.artemis.cli.commands.user.AddUser;
@@ -164,7 +165,7 @@ public class Artemis {
             withDefaultCommand(HelpData.class).withCommands(PrintData.class, XmlDataExporter.class, XmlDataImporter.class, DecodeJournal.class, EncodeJournal.class, CompactJournal.class);
          builder.withGroup("user").withDescription("default file-based user management (add|rm|list|reset) (example ./artemis user list)").
                  withDefaultCommand(HelpUser.class).withCommands(ListUser.class, AddUser.class, RemoveUser.class, ResetUser.class);
-         builder = builder.withCommands(Run.class, Stop.class, Kill.class, PerfJournal.class);
+         builder = builder.withCommands(Run.class, Stop.class, Kill.class, PerfJournal.class, StatJournal.class);
       } else {
          builder.withGroup("data").withDescription("data tools group (print) (example ./artemis data print)").
             withDefaultCommand(HelpData.class).withCommands(PrintData.class);

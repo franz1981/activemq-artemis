@@ -182,7 +182,7 @@ public class SyncCalculation {
       return timeWait;
    }
 
-   private static SequentialFileFactory newFactory(File datafolder, boolean datasync, JournalType journalType, int fileSize, int maxAIO) {
+   static SequentialFileFactory newFactory(File datafolder, boolean datasync, JournalType journalType, int fileSize, int maxAIO) {
       SequentialFileFactory factory;
 
       if (journalType == JournalType.ASYNCIO && !LibaioContext.isLoaded()) {
