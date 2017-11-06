@@ -30,7 +30,12 @@ public class Actor<T> extends ProcessorBase<T> {
 
    @Override
    protected final void doTask(T task) {
-      listener.onMessage(task);
+      try {
+         listener.onMessage(task);
+      } catch (Throwable error) {
+         incrementError();
+         throw error;
+      }
    }
 
    public final void act(T message) {

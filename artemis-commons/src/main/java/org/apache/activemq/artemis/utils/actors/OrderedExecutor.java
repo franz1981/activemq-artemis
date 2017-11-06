@@ -41,9 +41,11 @@ public class OrderedExecutor extends ProcessorBase<Runnable> implements ArtemisE
       try {
          task.run();
       } catch (ActiveMQInterruptedException e) {
+         incrementError();
          // This could happen during shutdowns. Nothing to be concerned about here
          logger.debug("Interrupted Thread", e);
       } catch (Throwable t) {
+         incrementError();
          logger.warn(t.getMessage(), t);
       }
 

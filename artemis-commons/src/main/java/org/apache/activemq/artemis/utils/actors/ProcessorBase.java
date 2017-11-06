@@ -22,6 +22,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 public abstract class ProcessorBase<T> {
 
@@ -29,6 +31,47 @@ public abstract class ProcessorBase<T> {
    private static final int STATE_RUNNING = 1;
 
    protected final Queue<T> tasks = new ConcurrentLinkedQueue<>();
+
+   //used to expose lightweight performance counters
+   private final AtomicLong consumed = new AtomicLong(0);
+   private final AtomicLong errors = new AtomicLong(0);
+   private final LongAdder submitted = new LongAdder();
+
+   /**
+    * Safe to be called by a single thread
+    */
+   private void incrementConsumed() {
+      //lightweight increment and add good for single writer cases
+      consumed.lazySet(consumed.get() + 1);
+   }
+
+   public final long consumed() {
+      return consumed.get();
+   }
+
+   /**
+    * Safe to be called by a single thread
+    */
+   protected final void incrementError() {
+      //lightweight increment and add good for single writer cases
+      errors.lazySet(errors.get() + 1);
+   }
+
+   public final long errors() {
+      return errors.get();
+   }
+
+   /**
+    * Safe to be called by multiple threads
+    */
+   private void incrementSubmitted() {
+      //lightweight increment and add good for single writer cases
+      submitted.increment();
+   }
+
+   public final long submitted() {
+      return submitted.longValue();
+   }
 
    private final Executor delegate;
 
@@ -50,6 +93,8 @@ public abstract class ProcessorBase<T> {
                T task = tasks.poll();
                //while the queue is not empty we process in order
                while (task != null) {
+                  //consider it consumed right after dequeued
+                  incrementConsumed();
                   doTask(task);
                   task = tasks.poll();
                }
@@ -111,6 +156,7 @@ public abstract class ProcessorBase<T> {
 
    protected void task(T command) {
       tasks.add(command);
+      incrementSubmitted();
       startPoller();
    }
 

@@ -29,6 +29,7 @@ import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
+import org.apache.activemq.artemis.core.actorscounter.ActorsStat;
 import org.apache.activemq.artemis.core.exception.ActiveMQXAException;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.persistence.StorageManager;
@@ -191,6 +192,8 @@ public class ServerSessionPacketHandler implements ChannelHandler {
       // However due to how transferConnection is handled we need to
       // use the same executor
       this.packetActor = new Actor<>(callExecutor, this::onMessagePacket);
+
+      ActorsStat.Instance.register(this.packetActor, "actor@packet_handler@" + this.channel.getConnection().getID() + "@" + this.channel.getID());
 
       if (conn instanceof NettyConnection) {
          direct = ((NettyConnection) conn).isDirectDeliver();
