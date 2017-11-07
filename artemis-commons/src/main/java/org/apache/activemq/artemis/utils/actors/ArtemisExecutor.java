@@ -38,6 +38,13 @@ public interface ArtemisExecutor extends Executor {
       };
    }
 
+   /**
+    * It will wait the current task to finish, but any further tasks won't be called
+    */
+   default void shutdownNow() {
+
+   }
+
    default boolean flush() {
       return flush(30, TimeUnit.SECONDS);
    }

@@ -34,6 +34,9 @@ public abstract class ProcessorBase<T> {
 
    private final ExecutorTask task = new ExecutorTask();
 
+   private final Object startedGuard = new Object();
+   private volatile boolean started = true;
+
    // used by stateUpdater
    @SuppressWarnings("unused")
    private volatile int state = 0;
@@ -49,8 +52,12 @@ public abstract class ProcessorBase<T> {
             if (stateUpdater.compareAndSet(ProcessorBase.this, STATE_NOT_RUNNING, STATE_RUNNING)) {
                T task = tasks.poll();
                //while the queue is not empty we process in order
-               while (task != null) {
-                  doTask(task);
+               while (task != null && started) {
+                  synchronized (startedGuard) {
+                     if (started) {
+                        doTask(task);
+                     }
+                  }
                   task = tasks.poll();
                }
                //set state back to not running.
@@ -64,6 +71,15 @@ public abstract class ProcessorBase<T> {
          }
          while (!tasks.isEmpty());
       }
+   }
+
+   /** It will wait the current execution (if there is one) to finish
+    *  but will not complete any further executions */
+   public void shutdownNow() {
+      synchronized (startedGuard) {
+         started = false;
+      }
+      tasks.clear();
    }
 
    protected abstract void doTask(T task);
@@ -110,8 +126,12 @@ public abstract class ProcessorBase<T> {
    }
 
    protected void task(T command) {
-      tasks.add(command);
-      startPoller();
+      // There is no need to verify the lock here.
+      // you can only turn of running once
+      if (started) {
+         tasks.add(command);
+         startPoller();
+      }
    }
 
    protected void startPoller() {
