@@ -236,7 +236,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
 
    private volatile boolean directDeliver = true;
 
-   private volatile boolean supportsDirectDeliver = true;
+   private volatile boolean supportsDirectDeliver = false;
 
    private AddressSettingsRepositoryListener addressSettingsRepositoryListener;
 
@@ -668,7 +668,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
                   // We must block on the executor to ensure any async deliveries have completed or we might get out of order
                   // deliveries
                   // Go into direct delivery mode
-                  directDeliver = supportsDirectDeliver;
+                  directDeliver = false;
                   if (logger.isTraceEnabled()) {
                      logger.trace("Setting direct deliverer to " + supportsDirectDeliver);
                   }
@@ -884,7 +884,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
                }
             }
 
-            this.supportsDirectDeliver = checkConsumerDirectDeliver();
+            this.supportsDirectDeliver = false;
 
             if (pos > 0 && pos >= consumerList.size()) {
                pos = consumerList.size() - 1;
