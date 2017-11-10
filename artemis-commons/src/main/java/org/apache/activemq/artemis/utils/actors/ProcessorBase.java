@@ -18,6 +18,7 @@
 package org.apache.activemq.artemis.utils.actors;
 
 import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -29,12 +30,15 @@ import org.jctools.queues.MpscUnboundedArrayQueue;
 
 public abstract class ProcessorBase<T> extends HandlerBase {
 
+   //TODO Just to play by changing q with ease: REMOVE THE PROPERTIES!!!
+   private static final boolean LLQ = Boolean.getBoolean("llq");
+   private static final int CHUNK_SIZE = Integer.getInteger("jctool.chunk", 128);
    private static final Logger logger = Logger.getLogger(ProcessorBase.class);
    public static final int STATE_NOT_RUNNING = 0;
    public static final int STATE_RUNNING = 1;
    public static final int STATE_FORCED_SHUTDOWN = 2;
 
-   protected final Queue<T> tasks = new MpscUnboundedArrayQueue<>(128);
+   protected final Queue<T> tasks = LLQ ? new ConcurrentLinkedQueue<>() : new MpscUnboundedArrayQueue<>(CHUNK_SIZE);
 
    private final Executor delegate;
    /**
@@ -54,7 +58,7 @@ public abstract class ProcessorBase<T> extends HandlerBase {
    private static final AtomicIntegerFieldUpdater<ProcessorBase> stateUpdater = AtomicIntegerFieldUpdater.newUpdater(ProcessorBase.class, "state");
 
    private void executePendingTasks() {
-      do {
+      while (!tasks.isEmpty() && !requestedShutdown) {
          //if there is no thread active and is not already dead then we run
          if (stateUpdater.compareAndSet(this, STATE_NOT_RUNNING, STATE_RUNNING)) {
             enter();
@@ -80,7 +84,6 @@ public abstract class ProcessorBase<T> extends HandlerBase {
          //but poll() has returned null, so a submitting thread will believe that it does not need re-execute.
          //this check fixes the issue
       }
-      while (!tasks.isEmpty() && !requestedShutdown);
    }
 
    /**
