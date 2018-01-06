@@ -33,6 +33,7 @@ import org.openjdk.jmh.annotations.GroupThreads;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
+import org.openjdk.jmh.annotations.Param;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
 import org.openjdk.jmh.annotations.State;
@@ -58,6 +59,8 @@ public class SimpleStringInternerBenchmark {
       "78554ba2-f303-11e7-8c3f-9a214cf093ae"
    };
 
+   @Param({"8", "16", "36"})
+   private int length;
    private Interner<SimpleString> guavaInterner;
    private SimpleString.Interner artemisInterner;
    private ByteBuf[] byteBufs;
@@ -67,9 +70,9 @@ public class SimpleStringInternerBenchmark {
    @Setup
    public void init() {
       guavaInterner = Interners.newWeakInterner();
-      artemisInterner = new SimpleString.Interner(UUIDS.length * 2, UUIDS[0].length() * 2);
+      artemisInterner = new SimpleString.Interner(UUIDS.length * 2, length * 2);
       byteBufs = Stream.of(UUIDS).map(uuid -> {
-         final SimpleString uuidSimple = new SimpleString(uuid);
+         final SimpleString uuidSimple = new SimpleString(uuid.substring(0, length));
          final int expectedLength = (uuidSimple.length() * 2) + 4;
          final ByteBuf byteBuf = UnpooledByteBufAllocator.DEFAULT.heapBuffer(expectedLength, expectedLength);
          SimpleString.writeSimpleString(byteBuf, uuidSimple);
@@ -128,11 +131,25 @@ public class SimpleStringInternerBenchmark {
       return guavaInterner.intern(SimpleString.readSimpleString(byteBuf));
    }
 
+   @Benchmark
+   public SimpleString noIntern(Sequence sequence) {
+      final ByteBuf byteBuf = sequence.nextByteBuf();
+      return SimpleString.readSimpleString(byteBuf);
+   }
+
+   @Benchmark
+   @GroupThreads(3)
+   public SimpleString noIntern3Threads(Sequence sequence) {
+      final ByteBuf byteBuf = sequence.nextByteBuf();
+      return SimpleString.readSimpleString(byteBuf);
+   }
+
    @Test
    public void run() throws RunnerException {
       final Options opt = new OptionsBuilder()
          .include(SimpleStringInternerBenchmark.class.getSimpleName())
          .addProfiler(GCProfiler.class)
+         .jvmArgs("-XX:+UseG1GC")
          .warmupIterations(5)
          .measurementIterations(5)
          .forks(2)
