@@ -28,10 +28,23 @@
    <name>ActiveMQ Artemis performance Tests</name>
 
    <properties>
+      <jmh.version>1.19</jmh.version>
       <activemq.basedir>${project.basedir}/../..</activemq.basedir>
    </properties>
 
    <dependencies>
+      <dependency>
+         <groupId>org.openjdk.jmh</groupId>
+         <artifactId>jmh-core</artifactId>
+         <version>${jmh.version}</version>
+         <scope>test</scope>
+      </dependency>
+      <dependency>
+         <groupId>org.openjdk.jmh</groupId>
+         <artifactId>jmh-generator-annprocess</artifactId>
+         <version>${jmh.version}</version>
+         <scope>test</scope>
+      </dependency>
       <dependency>
          <groupId>org.apache.activemq</groupId>
          <artifactId>artemis-core-client</artifactId>
