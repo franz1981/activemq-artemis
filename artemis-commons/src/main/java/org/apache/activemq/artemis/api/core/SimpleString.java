@@ -279,20 +279,6 @@ public final class SimpleString implements CharSequence, Serializable, Comparabl
       }
    }
 
-   public boolean equals(final String value) {
-      if (this.str != null) {
-         return this.str.equals(value);
-      } else {
-         if (value == null)
-            return false;
-         for (int i = 0, size = value.length(); i < size; i++) {
-            if (value.charAt(i) != this.charAt(i))
-               return false;
-         }
-         return true;
-      }
-   }
-
    /**
     * Returns {@code true} if  the {@link SimpleString} encoded content into {@code bytes} is equals to {@code s},
     * {@code false} otherwise.
@@ -539,7 +525,7 @@ public final class SimpleString implements CharSequence, Serializable, Comparabl
          if (entry == null) {
             return false;
          }
-         return entry.equals(value);
+         return entry.toString().equals(value);
       }
    }
 }
