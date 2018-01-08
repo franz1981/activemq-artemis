@@ -56,7 +56,7 @@ public abstract class AbstractPool<I, O> {
     */
    protected abstract boolean isEqual(O entry, I value);
 
-   protected int hashCode(I value){
+   protected int hashCode(I value) {
       return value.hashCode();
    }
 
