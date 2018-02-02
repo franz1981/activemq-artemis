@@ -32,8 +32,22 @@ import org.apache.activemq.artemis.core.buffers.impl.ChannelBufferWrapper;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
+import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
+import org.apache.activemq.artemis.utils.critical.CriticalComponentImpl;
+import org.jboss.logging.Logger;
 
-public final class TimedBuffer {
+public final class TimedBuffer extends CriticalComponentImpl {
+
+   protected static final int CRITICAL_PATHS = 6;
+   protected static final int CRITICAL_PATH_FLUSH = 0;
+   protected static final int CRITICAL_PATH_STOP = 1;
+   protected static final int CRITICAL_PATH_START = 2;
+   protected static final int CRITICAL_PATH_CHECK_SIZE = 3;
+   protected static final int CRITICAL_PATH_ADD_BYTES = 4;
+   protected static final int CRITICAL_PATH_SET_OBSERVER = 5;
+
+   private static final Logger logger = Logger.getLogger(TimedBuffer.class);
+
    // Constants -----------------------------------------------------
 
    // Attributes ----------------------------------------------------
@@ -89,7 +103,8 @@ public final class TimedBuffer {
 
    // Public --------------------------------------------------------
 
-   public TimedBuffer(final int size, final int timeout, final boolean logRates) {
+   public TimedBuffer(CriticalAnalyzer analyzer, final int size, final int timeout, final boolean logRates) {
+      super(analyzer, CRITICAL_PATHS);
       bufferSize = size;
 
       this.logRates = logRates;
