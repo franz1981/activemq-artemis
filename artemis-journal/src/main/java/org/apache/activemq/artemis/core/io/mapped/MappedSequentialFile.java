@@ -30,7 +30,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.io.SequentialFile;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
@@ -413,7 +413,7 @@ final class MappedSequentialFile implements SequentialFile {
 
    @Override
    @Deprecated
-   public void setTimedBuffer(TimedBuffer buffer) {
+   public void setTimedBuffer(WriteBuffer buffer) {
       throw new UnsupportedOperationException("the timed buffer is not currently supported");
    }
 

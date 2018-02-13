@@ -62,7 +62,7 @@ public final class MappedSequentialFileFactory extends AbstractSequentialFileFac
    @Override
    public SequentialFile createSequentialFile(String fileName) {
       final MappedSequentialFile mappedSequentialFile = new MappedSequentialFile(this, journalDir, new File(journalDir, fileName), capacity, critialErrorListener);
-      if (this.timedBuffer == null) {
+      if (this.writeBuffer == null) {
          return mappedSequentialFile;
       } else {
          return new TimedSequentialFile(this, mappedSequentialFile);
@@ -71,7 +71,7 @@ public final class MappedSequentialFileFactory extends AbstractSequentialFileFac
 
    @Override
    public boolean isSupportsCallbacks() {
-      return timedBuffer != null;
+      return writeBuffer != null;
    }
 
    @Override
@@ -185,15 +185,15 @@ public final class MappedSequentialFileFactory extends AbstractSequentialFileFac
 
    @Override
    public void start() {
-      if (timedBuffer != null) {
-         timedBuffer.start();
+      if (writeBuffer != null) {
+         writeBuffer.start();
       }
    }
 
    @Override
    public void stop() {
-      if (timedBuffer != null) {
-         timedBuffer.stop();
+      if (writeBuffer != null) {
+         writeBuffer.stop();
       }
    }
 

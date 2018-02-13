@@ -28,8 +28,8 @@ import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.io.buffer.TimedBufferObserver;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.io.util.FileIOUtil;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
@@ -51,7 +51,7 @@ public abstract class AbstractSequentialFile implements SequentialFile {
 
    protected final AtomicLong position = new AtomicLong(0);
 
-   protected TimedBuffer timedBuffer;
+   protected WriteBuffer timedBuffer;
 
    /**
     * Instead of having AIOSequentialFile implementing the Observer, I have done it on an inner class.
@@ -173,7 +173,7 @@ public abstract class AbstractSequentialFile implements SequentialFile {
    }
 
    @Override
-   public void setTimedBuffer(final TimedBuffer buffer) {
+   public void setTimedBuffer(final WriteBuffer buffer) {
       if (timedBuffer != null) {
          timedBuffer.setObserver(null);
       }

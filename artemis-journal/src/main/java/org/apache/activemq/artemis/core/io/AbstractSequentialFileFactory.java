@@ -29,8 +29,12 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
+import com.lmax.disruptor.LiteTimeoutBlockingWaitStrategy;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
+import org.apache.activemq.artemis.core.io.aio.AIOSequentialFileFactory;
+import org.apache.activemq.artemis.core.io.buffer.BatchingBuffer;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
@@ -49,7 +53,7 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
 
    protected final File journalDir;
 
-   protected final TimedBuffer timedBuffer;
+   protected WriteBuffer writeBuffer;
 
    protected final int bufferSize;
 
@@ -89,10 +93,13 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
       this.criticalAnalyzer = criticalAnalyzer;
 
       if (buffered && bufferTimeout > 0) {
-         timedBuffer = new TimedBuffer(criticalAnalyzer, bufferSize, bufferTimeout, logRates);
-         criticalAnalyzer.add(timedBuffer);
+         if (!(this instanceof AIOSequentialFileFactory)) {
+            TimedBuffer timedBuffer = new TimedBuffer(criticalAnalyzer, bufferSize, bufferTimeout, logRates);
+            criticalAnalyzer.add(timedBuffer);
+            writeBuffer = timedBuffer;
+         }
       } else {
-         timedBuffer = null;
+         writeBuffer = null;
       }
       this.bufferSize = bufferSize;
       this.bufferTimeout = bufferTimeout;
@@ -139,8 +146,8 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
 
    @Override
    public void stop() {
-      if (timedBuffer != null) {
-         timedBuffer.stop();
+      if (writeBuffer != null) {
+         writeBuffer.stop();
       }
 
       if (isSupportsCallbacks() && writeExecutor != null) {
@@ -163,8 +170,16 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
 
    @Override
    public void start() {
-      if (timedBuffer != null) {
-         timedBuffer.start();
+      //TODO special handling: improve me please, it is just to get the alignemnt final on Batching buffer
+      if (writeBuffer == null && bufferTimeout > 0) {
+         if (this instanceof AIOSequentialFileFactory) {
+            BatchingBuffer batchBuffer = new BatchingBuffer(criticalAnalyzer, getAlignment(), Math.min(maxIO, 128), bufferSize, new LiteTimeoutBlockingWaitStrategy(bufferTimeout, TimeUnit.NANOSECONDS));
+            criticalAnalyzer.add(batchBuffer);
+            writeBuffer = batchBuffer;
+         }
+      }
+      if (writeBuffer != null) {
+         writeBuffer.start();
       }
 
       if (isSupportsCallbacks()) {
@@ -193,24 +208,24 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
 
    @Override
    public void activateBuffer(final SequentialFile file) {
-      if (timedBuffer != null) {
-         file.setTimedBuffer(timedBuffer);
+      if (writeBuffer != null) {
+         file.setTimedBuffer(writeBuffer);
       }
    }
 
    @Override
    public void flush() {
-      if (timedBuffer != null) {
-         timedBuffer.flush();
+      if (writeBuffer != null) {
+         writeBuffer.flush();
       }
    }
 
    @Override
    public void deactivateBuffer() {
-      if (timedBuffer != null) {
+      if (writeBuffer != null) {
          // When moving to a new file, we need to make sure any pending buffer will be transferred to the buffer
-         timedBuffer.flush();
-         timedBuffer.setObserver(null);
+         writeBuffer.flush();
+         writeBuffer.setObserver(null);
       }
    }
 

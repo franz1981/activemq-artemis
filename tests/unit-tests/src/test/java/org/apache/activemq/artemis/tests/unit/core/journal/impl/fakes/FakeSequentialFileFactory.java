@@ -31,7 +31,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 
 public class FakeSequentialFileFactory implements SequentialFileFactory {
@@ -590,7 +590,7 @@ public class FakeSequentialFileFactory implements SequentialFileFactory {
        * @see org.apache.activemq.artemis.core.io.SequentialFile#setTimedBuffer(org.apache.activemq.artemis.core.io.buffer.TimedBuffer)
        */
       @Override
-      public void setTimedBuffer(final TimedBuffer buffer) {
+      public void setTimedBuffer(final WriteBuffer buffer) {
       }
 
       /* (non-Javadoc)

@@ -22,7 +22,7 @@ import java.nio.ByteBuffer;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 
 public interface SequentialFile {
@@ -115,7 +115,7 @@ public interface SequentialFile {
 
    void copyTo(SequentialFile newFileName) throws Exception;
 
-   void setTimedBuffer(TimedBuffer buffer);
+   void setTimedBuffer(WriteBuffer buffer);
 
    /**
     * Returns a native File of the file underlying this sequential file.

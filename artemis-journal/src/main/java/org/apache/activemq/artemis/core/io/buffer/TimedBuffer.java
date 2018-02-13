@@ -36,7 +36,7 @@ import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
 import org.apache.activemq.artemis.utils.critical.CriticalComponentImpl;
 import org.jboss.logging.Logger;
 
-public final class TimedBuffer extends CriticalComponentImpl {
+public final class TimedBuffer extends CriticalComponentImpl implements WriteBuffer {
 
    protected static final int CRITICAL_PATHS = 6;
    protected static final int CRITICAL_PATH_FLUSH = 0;
@@ -134,6 +134,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
       this.timeout = timeout;
    }
 
+   @Override
    public void start() {
       enterCritical(CRITICAL_PATH_START);
       try {
@@ -168,6 +169,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
       }
    }
 
+   @Override
    public void stop() {
       enterCritical(CRITICAL_PATH_STOP);
       Thread localTimer = null;
@@ -215,6 +217,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
       }
    }
 
+   @Override
    public void setObserver(final TimedBufferObserver observer) {
       enterCritical(CRITICAL_PATH_SET_OBSERVER);
       try {
@@ -235,6 +238,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
     *
     * @param sizeChecked
     */
+   @Override
    public boolean checkSize(final int sizeChecked) {
       enterCritical(CRITICAL_PATH_CHECK_SIZE);
       try {
@@ -279,6 +283,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
       }
    }
 
+   @Override
    public void addBytes(final ActiveMQBuffer bytes, final boolean sync, final IOCallback callback) {
       enterCritical(CRITICAL_PATH_ADD_BYTES);
       try {
@@ -308,6 +313,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
       }
    }
 
+   @Override
    public void addBytes(final EncodingSupport bytes, final boolean sync, final IOCallback callback) {
       enterCritical(CRITICAL_PATH_ADD_BYTES);
       try {
@@ -334,6 +340,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
    }
 
+   @Override
    public void flush() {
       flushBatch();
    }

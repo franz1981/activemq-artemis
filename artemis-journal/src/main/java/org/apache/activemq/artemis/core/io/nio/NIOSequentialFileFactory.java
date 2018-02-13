@@ -120,7 +120,7 @@ public final class NIOSequentialFileFactory extends AbstractSequentialFileFactor
 
    @Override
    public boolean isSupportsCallbacks() {
-      return timedBuffer != null;
+      return writeBuffer != null;
    }
 
    private static int align(final int value, final int pow2alignment) {
