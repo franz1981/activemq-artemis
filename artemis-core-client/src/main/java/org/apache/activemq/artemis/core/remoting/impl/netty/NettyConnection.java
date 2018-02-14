@@ -372,28 +372,7 @@ public class NettyConnection implements Connection {
       }
       //no need to lock because the Netty's channel is thread-safe
       //and the order of write is ensured by the order of the write calls
-      final EventLoop eventLoop = channel.eventLoop();
-      final boolean inEventLoop = eventLoop.inEventLoop();
-      if (!inEventLoop) {
-         writeNotInEventLoop(buffer, flush, batched, futureListener);
-      } else {
-         // OLD COMMENT:
-         // create a task which will be picked up by the eventloop and trigger the write.
-         // This is mainly needed as this method is triggered by different threads for the same channel.
-         // if we not do this we may produce out of order writes.
-         // NOTE:
-         // the submitted task does not effect in any way the current written size in the batch
-         // until the loop will process it, leading to a longer life for the ActiveMQBuffer buffer!!!
-         // To solve it, will be necessary to manually perform the count of the current batch instead of rely on the
-         // Channel:Config::writeBufferHighWaterMark value.
-         this.pendingWritesOnEventLoop += readableBytes;
-         this.pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
-         eventLoop.execute(() -> {
-            this.pendingWritesOnEventLoop -= readableBytes;
-            this.pendingWritesOnEventLoopView.lazySet(pendingWritesOnEventLoop);
-            writeInEventLoop(buffer, flush, batched, futureListener);
-         });
-      }
+      writeNotInEventLoop(buffer, flush, batched, futureListener);
    }
 
    private void writeNotInEventLoop(ActiveMQBuffer buffer,
