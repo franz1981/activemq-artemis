@@ -23,7 +23,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.buffer.Unpooled;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.api.core.ActiveMQQueueExistsException;
 import org.apache.activemq.artemis.api.core.ActiveMQSecurityException;
@@ -103,6 +103,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    private boolean global = false;
    private boolean isVolatile = false;
    private SimpleString tempQueueName;
+   private ByteBuf localHeapBuffer;
 
    public ProtonServerSenderContext(AMQPConnectionContext connection,
                                     Sender sender,
@@ -113,6 +114,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       this.sender = sender;
       this.protonSession = protonSession;
       this.sessionSPI = server;
+      this.localHeapBuffer = null;
    }
 
    public Object getBrokerConsumer() {
@@ -690,49 +692,53 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       // we only need a tag if we are going to settle later
       byte[] tag = preSettle ? new byte[0] : protonSession.getTag();
 
-      ByteBuf nettyBuffer = PooledByteBufAllocator.DEFAULT.heapBuffer(message.getEncodeSize());
-      try {
-         message.sendBuffer(nettyBuffer, deliveryCount);
-
-         int size = nettyBuffer.writerIndex();
-
-         while (!connection.tryLock(1, TimeUnit.SECONDS)) {
-            if (closed || sender.getLocalState() == EndpointState.CLOSED) {
-               // If we're waiting on the connection lock, the link might be in the process of closing.  If this happens
-               // we return.
-               return 0;
-            } else {
-               if (log.isDebugEnabled()) {
-                  log.debug("Couldn't get lock on deliverMessage " + this);
-               }
+      while (!connection.tryLock(1, TimeUnit.SECONDS)) {
+         if (closed || sender.getLocalState() == EndpointState.CLOSED) {
+            // If we're waiting on the connection lock, the link might be in the process of closing.  If this happens
+            // we return.
+            return 0;
+         } else {
+            if (log.isDebugEnabled()) {
+               log.debug("Couldn't get lock on deliverMessage " + this);
             }
          }
-
-         try {
-            final Delivery delivery;
-            delivery = sender.delivery(tag, 0, tag.length);
-            delivery.setMessageFormat((int) message.getMessageFormat());
-            delivery.setContext(messageReference);
-
-            // this will avoid a copy.. patch provided by Norman using buffer.array()
-            sender.send(nettyBuffer.array(), nettyBuffer.arrayOffset() + nettyBuffer.readerIndex(), nettyBuffer.readableBytes());
-
-            if (preSettle) {
-               // Presettled means the client implicitly accepts any delivery we send it.
-               sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
-               delivery.settle();
-            } else {
-               sender.advance();
-            }
-            connection.flush();
-         } finally {
-            connection.unlock();
-         }
-
-         return size;
-      } finally {
-         nettyBuffer.release();
       }
+      //connection is locked: only one thread at time
+      final int estimatedEncodeSize = message.getEncodeSize();
+      if (this.localHeapBuffer == null) {
+         this.localHeapBuffer = Unpooled.buffer(estimatedEncodeSize);
+      } else {
+         this.localHeapBuffer.clear();
+         this.localHeapBuffer.ensureWritable(estimatedEncodeSize);
+      }
+      ByteBuf nettyBuffer = this.localHeapBuffer;
+
+      message.sendBuffer(nettyBuffer, deliveryCount);
+
+      int size = nettyBuffer.writerIndex();
+
+      try {
+         final Delivery delivery;
+         delivery = sender.delivery(tag, 0, tag.length);
+         delivery.setMessageFormat((int) message.getMessageFormat());
+         delivery.setContext(messageReference);
+
+         // this will avoid a copy.. patch provided by Norman using buffer.array()
+         sender.send(nettyBuffer.array(), nettyBuffer.arrayOffset() + nettyBuffer.readerIndex(), nettyBuffer.readableBytes());
+
+         if (preSettle) {
+            // Presettled means the client implicitly accepts any delivery we send it.
+            sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
+            delivery.settle();
+         } else {
+            sender.advance();
+         }
+         connection.flush();
+      } finally {
+         connection.unlock();
+      }
+
+      return size;
    }
 
    private static boolean hasCapabilities(Symbol symbol, Source source) {
