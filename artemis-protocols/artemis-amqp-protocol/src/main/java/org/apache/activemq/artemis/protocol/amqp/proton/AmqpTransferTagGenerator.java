@@ -16,8 +16,8 @@
  */
 package org.apache.activemq.artemis.protocol.amqp.proton;
 
-import java.util.ArrayDeque;
-import java.util.Deque;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Utility class that can generate and if enabled pool the binary tag values
@@ -27,9 +27,9 @@ public final class AmqpTransferTagGenerator {
 
    public static final int DEFAULT_TAG_POOL_SIZE = 1024;
 
-   private final Deque<byte[]> tagPool;
+   private final ArrayBlockingQueue<byte[]> tagPool;
 
-   private long nextTagId;
+   private final AtomicLong nextTagId;
    private int maxPoolSize = DEFAULT_TAG_POOL_SIZE;
 
    public AmqpTransferTagGenerator() {
@@ -37,11 +37,16 @@ public final class AmqpTransferTagGenerator {
    }
 
    public AmqpTransferTagGenerator(boolean pool) {
+      this(pool, 0);
+   }
+
+   AmqpTransferTagGenerator(boolean pool, long initialValue) {
       if (pool) {
-         this.tagPool = new ArrayDeque<byte[]>();
+         this.tagPool = new ArrayBlockingQueue<>(1024);
       } else {
          this.tagPool = null;
       }
+      this.nextTagId = new AtomicLong(initialValue);
    }
 
    /**
@@ -49,15 +54,15 @@ public final class AmqpTransferTagGenerator {
     *
     * @return a new or unused tag depending on the pool option.
     */
-   public synchronized byte[] getNextTag() {
+   public byte[] getNextTag() {
       byte[] tagBytes = null;
 
       if (tagPool != null) {
-         tagBytes = tagPool.pollFirst();
+         tagBytes = tagPool.poll();
       }
 
       if (tagBytes == null) {
-         long tag = nextTagId++;
+         long tag = nextTagId.getAndIncrement();
          int size = encodingSize(tag);
 
          tagBytes = new byte[size];
@@ -77,9 +82,9 @@ public final class AmqpTransferTagGenerator {
     * @param data
     *        a previously borrowed tag that is no longer in use.
     */
-   public synchronized void returnTag(byte[] data) {
-      if (tagPool != null && tagPool.size() < maxPoolSize) {
-         tagPool.offerLast(data);
+   public void returnTag(byte[] data) {
+      if (tagPool != null) {
+         tagPool.offer(data);
       }
    }
 
@@ -111,7 +116,7 @@ public final class AmqpTransferTagGenerator {
       return tagPool != null;
    }
 
-   private int encodingSize(long value) {
+   private static int encodingSize(long value) {
       if (value < 0) {
          return Long.BYTES;
       }

@@ -25,7 +25,6 @@ import static org.junit.Assert.assertTrue;
 import java.io.ByteArrayInputStream;
 import java.io.DataInputStream;
 import java.io.IOException;
-import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 
@@ -139,12 +138,7 @@ public class AmqpTransferTagGeneratorTest {
 
    @Test
    public void testTagGenerationWorksWithIdRollover() throws Exception {
-      AmqpTransferTagGenerator tagGen = new AmqpTransferTagGenerator(false);
-
-      Field urisField = tagGen.getClass().getDeclaredField("nextTagId");
-      urisField.setAccessible(true);
-      urisField.set(tagGen, Long.MAX_VALUE + 1);
-
+      AmqpTransferTagGenerator tagGen = new AmqpTransferTagGenerator(false, Long.MAX_VALUE + 1);
       {
          byte[] tag = tagGen.getNextTag();
 
