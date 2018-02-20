@@ -17,9 +17,8 @@
 package org.apache.activemq.artemis.core.remoting.impl.netty;
 
 import java.net.SocketAddress;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
@@ -60,8 +59,7 @@ public class NettyConnection implements Connection {
     * if {@link #isWritable(ReadyListener)} returns false, we add a callback
     * here for when the connection (or Netty Channel) becomes available again.
     */
-   private final List<ReadyListener> readyListeners = new ArrayList<>();
-   private final ThreadLocal<ArrayList<ReadyListener>> localListenersPool = ThreadLocal.withInitial(ArrayList::new);
+   private final ConcurrentLinkedQueue<ReadyListener> readyListeners = new ConcurrentLinkedQueue<>();
 
    private final boolean batchingEnabled;
    private final int writeBufferHighWaterMark;
@@ -77,7 +75,7 @@ public class NettyConnection implements Connection {
    private boolean closed;
    private RemotingConnection protocolConnection;
 
-   private boolean ready = true;
+   private volatile boolean ready = true;
 
    public NettyConnection(final Map<String, Object> configuration,
                           final Channel channel,
@@ -153,49 +151,25 @@ public class NettyConnection implements Connection {
 
    @Override
    public final boolean isWritable(ReadyListener callback) {
-      synchronized (readyListeners) {
-         if (!ready) {
-            readyListeners.add(callback);
-         }
-
-         return ready;
+      final boolean isReady = this.ready;
+      if (!isReady) {
+         readyListeners.add(callback);
       }
+      return isReady;
    }
 
    @Override
    public final void fireReady(final boolean ready) {
-      final ArrayList<ReadyListener> readyToCall = localListenersPool.get();
-      synchronized (readyListeners) {
-         this.ready = ready;
-
-         if (ready) {
-            final int size = this.readyListeners.size();
-            readyToCall.ensureCapacity(size);
+      this.ready = ready;
+      if (ready) {
+         ReadyListener readyListener;
+         while ((readyListener = readyListeners.poll()) != null) {
             try {
-               for (int i = 0; i < size; i++) {
-                  final ReadyListener readyListener = readyListeners.get(i);
-                  if (readyListener == null) {
-                     break;
-                  }
-                  readyToCall.add(readyListener);
-               }
-            } finally {
-               readyListeners.clear();
-            }
-         }
-      }
-      try {
-         final int size = readyToCall.size();
-         for (int i = 0; i < size; i++) {
-            try {
-               final ReadyListener readyListener = readyToCall.get(i);
                readyListener.readyForWriting();
             } catch (Throwable logOnly) {
                ActiveMQClientLogger.LOGGER.failedToSetChannelReadyForWriting(logOnly);
             }
          }
-      } finally {
-         readyToCall.clear();
       }
    }
 

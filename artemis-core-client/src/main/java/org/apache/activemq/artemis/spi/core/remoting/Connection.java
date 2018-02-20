@@ -59,6 +59,11 @@ public interface Connection {
       return true;
    }
 
+   /**
+    * To work correctly this shouldn't been called concurrently
+    *
+    * @param ready
+    */
    void fireReady(boolean ready);
 
    /**
