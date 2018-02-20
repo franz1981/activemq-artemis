@@ -254,13 +254,15 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
 
    @Override
    public void bufferReceived(Object connectionID, ActiveMQBuffer buffer) {
-      super.bufferReceived(connectionID, buffer);
       try {
-
+         super.bufferReceived(connectionID, buffer);
          recoverOperationContext();
-
-         Command command = (Command) wireFormat.unmarshal(buffer);
-
+         Command command;
+         try {
+            command = (Command) wireFormat.unmarshal(buffer);
+         } finally {
+            buffer.release();
+         }
          // log the openwire command
          if (logger.isTraceEnabled()) {
             logger.trace("connectionID: " + connectionID + " RECEIVED: " + (command == null ? "NULL" : command));

@@ -362,17 +362,19 @@ public class RemotingConnectionImpl extends AbstractRemotingConnection implement
    @Override
    public void bufferReceived(final Object connectionID, final ActiveMQBuffer buffer) {
       try {
-         final Packet packet = packetDecoder.decode(buffer, this);
+         final Packet packet;
+         try {
+            super.bufferReceived(connectionID, buffer);
+            packet = packetDecoder.decode(buffer, this);
+         } finally {
+            buffer.release();
+         }
 
          if (logger.isTraceEnabled()) {
             logger.trace("RemotingConnectionID=" + getID() + " handling packet " + packet);
          }
 
-         dataReceived = true;
-
          doBufferReceived(packet);
-
-         super.bufferReceived(connectionID, buffer);
       } catch (Throwable e) {
          ActiveMQClientLogger.LOGGER.errorDecodingPacket(e);
          throw new IllegalStateException(e);

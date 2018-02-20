@@ -188,7 +188,7 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
    }
 
    public void onTransport(ByteBuf byteBuf, AMQPConnectionContext amqpConnection) {
-      connection.write(new ChannelBufferWrapper(byteBuf, true));
+      connection.write(new ChannelBufferWrapper(byteBuf, true, true));
    }
 
    public boolean isWritable(ReadyListener readyListener) {

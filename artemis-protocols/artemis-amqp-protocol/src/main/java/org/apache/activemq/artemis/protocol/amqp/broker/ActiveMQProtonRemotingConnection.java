@@ -16,6 +16,7 @@
  */
 package org.apache.activemq.artemis.protocol.amqp.broker;
 
+import javax.security.auth.Subject;
 import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
@@ -28,9 +29,8 @@ import org.apache.activemq.artemis.protocol.amqp.proton.AmqpSupport;
 import org.apache.activemq.artemis.protocol.amqp.sasl.SASLResult;
 import org.apache.activemq.artemis.spi.core.protocol.AbstractRemotingConnection;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
+import org.apache.activemq.artemis.utils.actors.Actor;
 import org.apache.qpid.proton.amqp.transport.ErrorCondition;
-
-import javax.security.auth.Subject;
 
 /**
  * This is a Server's Connection representation used by ActiveMQ Artemis.
@@ -43,6 +43,8 @@ public class ActiveMQProtonRemotingConnection extends AbstractRemotingConnection
 
    private final ProtonProtocolManager manager;
 
+   private final Actor<ActiveMQBuffer> packetActor;
+
    public ActiveMQProtonRemotingConnection(ProtonProtocolManager manager,
                                            AMQPConnectionContext amqpConnection,
                                            Connection transportConnection,
@@ -50,6 +52,14 @@ public class ActiveMQProtonRemotingConnection extends AbstractRemotingConnection
       super(transportConnection, executor);
       this.manager = manager;
       this.amqpConnection = amqpConnection;
+      //use directly the server thread pool to not have additional any level of indirections
+      this.packetActor = new Actor<>(manager.getServer().getThreadPool(), packet -> {
+         try {
+            amqpConnection.inputBuffer(packet.byteBuf());
+         } finally {
+            packet.release();
+         }
+      });
    }
 
    public Executor getExecutor() {
@@ -138,8 +148,10 @@ public class ActiveMQProtonRemotingConnection extends AbstractRemotingConnection
 
    @Override
    public void bufferReceived(Object connectionID, ActiveMQBuffer buffer) {
-      amqpConnection.inputBuffer(buffer.byteBuf());
+      //doesn't need to increment ref counting here, because super.bufferReceived just use it temporary
       super.bufferReceived(connectionID, buffer);
+      packetActor.act(buffer);
+
    }
 
    private void internalClose() {
