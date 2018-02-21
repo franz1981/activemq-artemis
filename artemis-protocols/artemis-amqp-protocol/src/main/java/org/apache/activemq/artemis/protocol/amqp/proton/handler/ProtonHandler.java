@@ -26,6 +26,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
 import org.apache.activemq.artemis.protocol.amqp.proton.ProtonInitializable;
 import org.apache.activemq.artemis.protocol.amqp.sasl.ClientSASL;
 import org.apache.activemq.artemis.protocol.amqp.sasl.SASLResult;
@@ -43,9 +45,6 @@ import org.apache.qpid.proton.engine.Event;
 import org.apache.qpid.proton.engine.Sasl;
 import org.apache.qpid.proton.engine.Transport;
 import org.jboss.logging.Logger;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 
 public class ProtonHandler extends ProtonInitializable {
 
@@ -189,7 +188,15 @@ public class ProtonHandler extends ProtonInitializable {
             // We allocated a Pooled Direct Buffer, that will be sent down the stream
             ByteBuf buffer = PooledByteBufAllocator.DEFAULT.directBuffer(pending);
             ByteBuffer head = transport.head();
-            buffer.writeBytes(head);
+            if (head.isReadOnly() && !head.hasArray()) {
+               final int length = head.remaining();
+               buffer.ensureWritable(length);
+               final ByteBuffer nioBuffer = buffer.internalNioBuffer(0, length);
+               nioBuffer.put(head);
+               buffer.writerIndex(length);
+            } else {
+               buffer.writeBytes(head);
+            }
 
             for (EventHandler handler : handlers) {
                handler.pushBytes(buffer);
