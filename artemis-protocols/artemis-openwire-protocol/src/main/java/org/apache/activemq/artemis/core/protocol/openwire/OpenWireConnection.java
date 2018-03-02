@@ -205,7 +205,9 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
       this.operationContext = server.newOperationContext();
       this.protocolManager = openWireProtocolManager;
       this.inWireFormat = wf;
+      this.inWireFormat.setCacheEnabled(true);
       this.outWireFormat = wf.copy();
+      this.outWireFormat.setCacheEnabled(true);
       this.useKeepAlive = openWireProtocolManager.isUseKeepAlive();
       this.maxInactivityDuration = openWireProtocolManager.getMaxInactivityDuration();
    }
@@ -578,10 +580,6 @@ public class OpenWireConnection extends AbstractRemotingConnection implements Se
       }
 
       sendCommand(dispatch);
-   }
-
-   public OpenWireFormat wireFormat() {
-      return this.inWireFormat;
    }
 
    private void shutdown(boolean fail) {

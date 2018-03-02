@@ -107,7 +107,8 @@ public class AMQSession implements SessionCallback {
       this.connection = connection;
       this.protocolManager = protocolManager;
       this.scheduledPool = protocolManager.getScheduledPool();
-      this.protocolManagerWireFormat = protocolManager.wireFormat().copy();
+      this.protocolManagerWireFormat = protocolManager.createWireFormat();
+      this.protocolManagerWireFormat.setCacheEnabled(true);
       this.enableAutoReadAndTtl = this::enableAutoReadAndTtl;
       this.existingQueuesCache = null;
    }

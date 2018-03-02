@@ -95,7 +95,7 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, Cl
 
    private final OpenWireProtocolManagerFactory factory;
 
-   private OpenWireFormatFactory wireFactory;
+   private final OpenWireFormatFactory wireFactory;
 
    private boolean prefixPacketSize = true;
 
@@ -130,8 +130,6 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, Cl
    //to management service
    private boolean suppressInternalManagementObjects = true;
 
-   private final OpenWireFormat wireFormat;
-
    private final Map<SimpleString, RoutingType> prefixes = new HashMap<>();
 
    private final Map<DestinationFilter, Integer> vtConsumerDestinationMatchers = new HashMap<>();
@@ -141,11 +139,9 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, Cl
       this.factory = factory;
       this.server = server;
       this.wireFactory = new OpenWireFormatFactory();
-      // preferred prop, should be done via config
-      wireFactory.setCacheEnabled(false);
+      this.wireFactory.setCacheEnabled(true);
       advisoryProducerId.setConnectionId(ID_GENERATOR.generateId());
       scheduledPool = server.getScheduledPool();
-      this.wireFormat = (OpenWireFormat) wireFactory.createWireFormat();
 
       final ClusterManager clusterManager = this.server.getClusterManager();
 
@@ -597,8 +593,8 @@ public class OpenWireProtocolManager implements ProtocolManager<Interceptor>, Cl
       return total;
    }
 
-   public OpenWireFormat wireFormat() {
-      return wireFormat;
+   public OpenWireFormat createWireFormat() {
+      return (OpenWireFormat) this.wireFactory.createWireFormat();
    }
 
    public boolean isSupportAdvisory() {
