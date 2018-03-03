@@ -32,7 +32,6 @@ import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.core.exception.ActiveMQXAException;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.persistence.StorageManager;
-import org.apache.activemq.artemis.core.protocol.core.impl.CoreProtocolManager;
 import org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ActiveMQExceptionMessage;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.CreateAddressMessage;
@@ -84,7 +83,6 @@ import org.apache.activemq.artemis.core.remoting.CloseListener;
 import org.apache.activemq.artemis.core.remoting.FailureListener;
 import org.apache.activemq.artemis.core.remoting.impl.netty.NettyConnection;
 import org.apache.activemq.artemis.core.server.ActiveMQMessageBundle;
-import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.BindingQueryResult;
 import org.apache.activemq.artemis.core.server.LargeServerMessage;
@@ -92,10 +90,6 @@ import org.apache.activemq.artemis.core.server.QueueQueryResult;
 import org.apache.activemq.artemis.core.server.ServerSession;
 import org.apache.activemq.artemis.spi.core.protocol.EmbedMessageUtil;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
-import org.apache.activemq.artemis.utils.SimpleFuture;
-import org.apache.activemq.artemis.utils.SimpleFutureImpl;
-import org.apache.activemq.artemis.utils.actors.Actor;
-import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.jboss.logging.Logger;
 
 import static org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl.CREATE_ADDRESS;
@@ -148,25 +142,15 @@ public class ServerSessionPacketHandler implements ChannelHandler {
 
    private volatile CoreRemotingConnection remotingConnection;
 
-   private final Actor<Packet> packetActor;
-
-   private final ArtemisExecutor callExecutor;
-
-   private final CoreProtocolManager manager;
-
    // The current currentLargeMessage being processed
    private volatile LargeServerMessage currentLargeMessage;
 
    private final boolean direct;
 
 
-   public ServerSessionPacketHandler(final ActiveMQServer server,
-                                     final CoreProtocolManager manager,
-                                     final ServerSession session,
+   public ServerSessionPacketHandler(final ServerSession session,
                                      final StorageManager storageManager,
                                      final Channel channel) {
-      this.manager = manager;
-
       this.session = session;
 
       session.addCloseable((boolean failed) -> clearLargeMessage());
@@ -178,14 +162,6 @@ public class ServerSessionPacketHandler implements ChannelHandler {
       this.remotingConnection = channel.getConnection();
 
       Connection conn = remotingConnection.getTransportConnection();
-
-      this.callExecutor = server.getExecutorFactory().getExecutor();
-
-      // In an optimized way packetActor should use the threadPool as the parent executor
-      // directly from server.getThreadPool();
-      // However due to how transferConnection is handled we need to
-      // use the same executor
-      this.packetActor = new Actor<>(callExecutor, this::onMessagePacket);
 
       if (conn instanceof NettyConnection) {
          direct = ((NettyConnection) conn).isDirectDeliver();
@@ -215,8 +191,6 @@ public class ServerSessionPacketHandler implements ChannelHandler {
    public void connectionFailed(final ActiveMQException exception, boolean failedOver) {
       ActiveMQServerLogger.LOGGER.clientConnectionFailed(session.getName());
 
-      closeExecutors();
-
       try {
          session.close(true);
       } catch (Exception e) {
@@ -226,14 +200,7 @@ public class ServerSessionPacketHandler implements ChannelHandler {
       ActiveMQServerLogger.LOGGER.clearingUpSession(session.getName());
    }
 
-   public void closeExecutors() {
-      packetActor.shutdown();
-      callExecutor.shutdown();
-   }
-
    public void close() {
-      closeExecutors();
-
       channel.flushConfirmations();
 
       try {
@@ -249,12 +216,6 @@ public class ServerSessionPacketHandler implements ChannelHandler {
 
    @Override
    public void handlePacket(final Packet packet) {
-
-      // This method will call onMessagePacket through an actor
-      packetActor.act(packet);
-   }
-
-   private void onMessagePacket(final Packet packet) {
       if (logger.isTraceEnabled()) {
          logger.trace("ServerSessionPacketHandler::handlePacket," + packet);
       }
@@ -869,15 +830,8 @@ public class ServerSessionPacketHandler implements ChannelHandler {
    }
 
    public int transferConnection(final CoreRemotingConnection newConnection, final int lastReceivedCommandID) {
-
-      SimpleFuture<Integer> future = new SimpleFutureImpl<>();
-      callExecutor.execute(() -> {
-         int value = internaltransferConnection(newConnection, lastReceivedCommandID);
-         future.set(value);
-      });
-
       try {
-         return future.get().intValue();
+         return internaltransferConnection(newConnection, lastReceivedCommandID);
       } catch (Exception e) {
          throw new IllegalStateException(e);
       }

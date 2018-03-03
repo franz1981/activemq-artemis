@@ -68,11 +68,6 @@ public final class CoreSessionCallback implements SessionCallback {
 
    @Override
    public void close(boolean failed) {
-      ServerSessionPacketHandler localHandler = handler;
-      if (localHandler != null) {
-         // We wait any pending tasks before we make this as closed
-         localHandler.closeExecutors();
-      }
       this.handler = null;
    }
 
