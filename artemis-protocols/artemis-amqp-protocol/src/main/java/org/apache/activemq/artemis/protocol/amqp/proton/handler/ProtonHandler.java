@@ -16,17 +16,21 @@
  */
 package org.apache.activemq.artemis.protocol.amqp.proton.handler;
 
+import javax.security.auth.Subject;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
-import javax.security.auth.Subject;
-
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.util.internal.shaded.org.jctools.queues.MpscUnboundedArrayQueue;
+import io.netty.util.internal.shaded.org.jctools.util.UnsafeAccess;
 import org.apache.activemq.artemis.protocol.amqp.broker.ProtonProtocolManager;
 import org.apache.activemq.artemis.protocol.amqp.proton.ProtonInitializable;
 import org.apache.activemq.artemis.protocol.amqp.sasl.ClientSASL;
@@ -34,7 +38,6 @@ import org.apache.activemq.artemis.protocol.amqp.sasl.SASLResult;
 import org.apache.activemq.artemis.protocol.amqp.sasl.ServerSASL;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.artemis.utils.ByteUtil;
-import org.apache.activemq.artemis.utils.actors.Actor;
 import org.apache.qpid.proton.Proton;
 import org.apache.qpid.proton.amqp.Symbol;
 import org.apache.qpid.proton.amqp.transport.AmqpError;
@@ -47,9 +50,6 @@ import org.apache.qpid.proton.engine.Sasl;
 import org.apache.qpid.proton.engine.Transport;
 import org.apache.qpid.proton.engine.impl.TransportInternal;
 import org.jboss.logging.Logger;
-
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.PooledByteBufAllocator;
 
 public class ProtonHandler extends ProtonInitializable {
 
@@ -90,17 +90,22 @@ public class ProtonHandler extends ProtonInitializable {
 
    boolean inDispatch = false;
 
-   private final Actor<ByteBuf> bufferActor;
+   private final ProtonProtocolManager protonProtocolManager;
 
-   final ProtonProtocolManager protonProtocolManager;
+   private static final int BATCH_SIZE = 32;
+
+   private final Queue<ByteBuf> inputBuffers = new MpscUnboundedArrayQueue<>(128);
+
+   private final Queue<Runnable> protonTasks = new MpscUnboundedArrayQueue<>(128);
+
+   private volatile boolean consumerPreempt = true;
+
+   private final Runnable dutyCycle;
 
    public ProtonHandler(ProtonProtocolManager protonProtocolManager, Executor flushExecutor, boolean isServer) {
       this.protonProtocolManager = protonProtocolManager;
       this.flushExecutor = flushExecutor;
-      this.readyListener = () -> flushExecutor.execute(() -> {
-         flush();
-      });
-      this.bufferActor = new Actor<>(flushExecutor, this::actBuffer);
+      this.readyListener = () -> execute(this::flush);
       this.creationTime = System.currentTimeMillis();
       this.isServer = isServer;
 
@@ -113,6 +118,7 @@ public class ProtonHandler extends ProtonInitializable {
 
       transport.bind(connection);
       connection.collect(collector);
+      this.dutyCycle = this::doWorks;
    }
 
    public long tick(boolean firstTick) {
@@ -142,7 +148,14 @@ public class ProtonHandler extends ProtonInitializable {
    }
 
    public void execute(Runnable runnable) {
-      flushExecutor.execute(runnable);
+      if (!protonTasks.offer(runnable)) {
+         throw new IllegalStateException("Rejected proton task");
+      }
+      //StoreLoad is needed to prevent consumerPreempt's load to happen before writing into the queue
+      UnsafeAccess.UNSAFE.fullFence();
+      if (consumerPreempt) {
+         flushExecutor.execute(dutyCycle);
+      }
    }
 
    public int capacity() {
@@ -233,56 +246,116 @@ public class ProtonHandler extends ProtonInitializable {
 
       protonProtocolManager.pressureIn(buffer.writerIndex());
 
-      bufferActor.act(buffer.retain());
+      buffer.retain();
+      if (!inputBuffers.offer(buffer)) {
+         buffer.release();
+         throw new IllegalStateException("Rejected input buffer");
+      }
+      //StoreLoad is needed to prevent consumerPreempt's load to happen before writing into the queue
+      UnsafeAccess.UNSAFE.fullFence();
+      if (consumerPreempt) {
+         flushExecutor.execute(dutyCycle);
+      }
    }
 
-   private void actBuffer(ByteBuf buffer) {
-      int credits = buffer.writerIndex();
+   private void doWorks() {
+      consumerPreempt = false;
+      //volatile store === StoreLoad
+      do {
+         long tasks;
+         do {
+            tasks = 0;
+            tasks += processInputBuffers(BATCH_SIZE);
+            tasks += processProtonTasks(BATCH_SIZE);
+         }
+         while (tasks > 0);
+         //no more work to do, we could preempt
+         consumerPreempt = true;
+         //volatile store === StoreLoad
+         if (!inputBuffers.isEmpty() || !protonTasks.isEmpty()) {
+            //raced with a producer, abort sleep
+            consumerPreempt = false;
+            //volatile store === StoreLoad
+         }
+      }
+      while (!consumerPreempt);
+   }
+
+   private int processProtonTasks(int limit) {
+      int tasks = 0;
+      for (int i = 0; i < limit; i++) {
+         final Runnable task = protonTasks.poll();
+         if (task == null) {
+            break;
+         }
+         tasks++;
+         try {
+            task.run();
+         } catch (Throwable t) {
+            //TODO improve this please
+         }
+      }
+      return tasks;
+   }
+
+   private int processInputBuffers(int limit) {
+      int credits = 0;
       lock.lock();
       try {
-         while (buffer.readableBytes() > 0) {
-            int capacity = transport.capacity();
-
-            if (!receivedFirstPacket) {
-               try {
-                  byte auth = buffer.getByte(4);
-                  if (auth == SASL || auth == BARE) {
-                     if (isServer) {
-                        dispatchAuth(auth == SASL);
-                     } else if (auth == BARE && clientSASLMechanism == null) {
-                        dispatchAuthSuccess();
-                     }
-                     /*
-                     * there is a chance that if SASL Handshake has been carried out that the capacity may change.
-                     * */
-                     capacity = transport.capacity();
-                  }
-               } catch (Throwable e) {
-                  log.warn(e.getMessage(), e);
-               }
-
-               receivedFirstPacket = true;
+         for (int i = 0; i < limit; i++) {
+            final ByteBuf buffer = inputBuffers.poll();
+            if (buffer == null) {
+               return i;
             }
+            try {
+               credits += buffer.writerIndex();
+               while (buffer.readableBytes() > 0) {
+                  int capacity = transport.capacity();
 
-            if (capacity > 0) {
-               ByteBuffer tail = transport.tail();
-               int min = Math.min(capacity, buffer.readableBytes());
-               tail.limit(min);
-               buffer.readBytes(tail);
+                  if (!receivedFirstPacket) {
+                     try {
+                        byte auth = buffer.getByte(4);
+                        if (auth == SASL || auth == BARE) {
+                           if (isServer) {
+                              dispatchAuth(auth == SASL);
+                           } else if (auth == BARE && clientSASLMechanism == null) {
+                              dispatchAuthSuccess();
+                           }
+                           /*
+                            * there is a chance that if SASL Handshake has been carried out that the capacity may change.
+                            * */
+                           capacity = transport.capacity();
+                        }
+                     } catch (Throwable e) {
+                        log.warn(e.getMessage(), e);
+                     }
 
-               flush();
-            } else {
-               if (capacity == 0) {
-                  log.debugf("abandoning: readableBytes=%d", buffer.readableBytes());
-               } else {
-                  log.debugf("transport closed, discarding: readableBytes=%d, capacity=%d", buffer.readableBytes(), transport.capacity());
+                     receivedFirstPacket = true;
+                  }
+
+                  if (capacity > 0) {
+                     ByteBuffer tail = transport.tail();
+                     int min = Math.min(capacity, buffer.readableBytes());
+                     tail.limit(min);
+                     buffer.readBytes(tail);
+
+                     flush();
+                  } else {
+                     if (capacity == 0) {
+                        log.debugf("abandoning: readableBytes=%d", buffer.readableBytes());
+                     } else {
+                        log.debugf("transport closed, discarding: readableBytes=%d, capacity=%d", buffer.readableBytes(), transport.capacity());
+                     }
+                     break;
+                  }
                }
-               break;
+            } finally {
+               buffer.release();
             }
          }
+         return limit;
       } finally {
          lock.unlock();
-         buffer.release();
          protonProtocolManager.pressureOut(credits);
       }
    }
