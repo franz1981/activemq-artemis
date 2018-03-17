@@ -204,34 +204,55 @@ public class ProtonHandler extends ProtonInitializable {
       sasl.setMechanisms(mechanisms);
    }
 
+   private boolean flowControl() {
+      for (int i = 0, size = handlers.size(); i < size; i++) {
+         final EventHandler handler = handlers.get(i);
+         if (!handler.flowControl(readyListener)) {
+            return false;
+         }
+      }
+      return true;
+   }
+
+   private void lockedPushBytes() {
+      assert lock.isHeldByCurrentThread();
+      while (true) {
+         int pending = transport.pending();
+
+         if (pending <= 0) {
+            break;
+         }
+
+         // We allocated a Pooled Direct Buffer, that will be sent down the stream
+         ByteBuf buffer = PooledByteBufAllocator.DEFAULT.directBuffer(pending);
+         ByteBuffer head = transport.head();
+         buffer.writeBytes(head);
+
+         for (int i = 0, size = handlers.size(); i < size; i++) {
+            final EventHandler handler = handlers.get(i);
+            handler.pushBytes(buffer);
+         }
+
+         transport.pop(pending);
+      }
+   }
+
+   private void lockedFlushBytes() {
+      if (!flowControl()) {
+         return;
+      }
+      lockedPushBytes();
+   }
+
    public void flushBytes() {
 
-      for (EventHandler handler : handlers) {
-         if (!handler.flowControl(readyListener)) {
-            return;
-         }
+      if (!flowControl()) {
+         return;
       }
 
       lock.lock();
       try {
-         while (true) {
-            int pending = transport.pending();
-
-            if (pending <= 0) {
-               break;
-            }
-
-            // We allocated a Pooled Direct Buffer, that will be sent down the stream
-            ByteBuf buffer = PooledByteBufAllocator.DEFAULT.directBuffer(pending);
-            ByteBuffer head = transport.head();
-            buffer.writeBytes(head);
-
-            for (EventHandler handler : handlers) {
-               handler.pushBytes(buffer);
-            }
-
-            transport.pop(pending);
-         }
+         lockedPushBytes();
       } finally {
          lock.unlock();
       }
@@ -298,6 +319,27 @@ public class ProtonHandler extends ProtonInitializable {
       return tasks;
    }
 
+   private int processFirstPacket(final ByteBuf buffer, int capacity) {
+      assert !receivedFirstPacket;
+      try {
+         byte auth = buffer.getByte(4);
+         if (auth == SASL || auth == BARE) {
+            if (isServer) {
+               dispatchAuth(auth == SASL);
+            } else if (auth == BARE && clientSASLMechanism == null) {
+               dispatchAuthSuccess();
+            }
+            /*
+             * there is a chance that if SASL Handshake has been carried out that the capacity may change.
+             * */
+            capacity = transport.capacity();
+         }
+      } catch (Throwable e) {
+         log.warn(e.getMessage(), e);
+      }
+      return capacity;
+   }
+
    private int processInputBuffers(int limit) {
       int credits = 0;
       lock.lock();
@@ -307,56 +349,46 @@ public class ProtonHandler extends ProtonInitializable {
             if (buffer == null) {
                return i;
             }
-            try {
-               credits += buffer.writerIndex();
-               while (buffer.readableBytes() > 0) {
-                  int capacity = transport.capacity();
-
-                  if (!receivedFirstPacket) {
-                     try {
-                        byte auth = buffer.getByte(4);
-                        if (auth == SASL || auth == BARE) {
-                           if (isServer) {
-                              dispatchAuth(auth == SASL);
-                           } else if (auth == BARE && clientSASLMechanism == null) {
-                              dispatchAuthSuccess();
-                           }
-                           /*
-                            * there is a chance that if SASL Handshake has been carried out that the capacity may change.
-                            * */
-                           capacity = transport.capacity();
-                        }
-                     } catch (Throwable e) {
-                        log.warn(e.getMessage(), e);
-                     }
-
-                     receivedFirstPacket = true;
-                  }
-
-                  if (capacity > 0) {
-                     ByteBuffer tail = transport.tail();
-                     int min = Math.min(capacity, buffer.readableBytes());
-                     tail.limit(min);
-                     buffer.readBytes(tail);
-
-                     flush();
-                  } else {
-                     if (capacity == 0) {
-                        log.debugf("abandoning: readableBytes=%d", buffer.readableBytes());
-                     } else {
-                        log.debugf("transport closed, discarding: readableBytes=%d, capacity=%d", buffer.readableBytes(), transport.capacity());
-                     }
-                     break;
-                  }
-               }
-            } finally {
-               buffer.release();
-            }
+            credits += buffer.writerIndex();
+            lockedProcessInputBuffer(buffer);
          }
          return limit;
       } finally {
          lock.unlock();
          protonProtocolManager.pressureOut(credits);
+      }
+   }
+
+   private void lockedProcessInputBuffer(ByteBuf buffer) {
+      assert lock.isHeldByCurrentThread();
+      try {
+         while (buffer.readableBytes() > 0) {
+            int capacity = transport.capacity();
+            if (!receivedFirstPacket) {
+               capacity = processFirstPacket(buffer, capacity);
+               receivedFirstPacket = true;
+            }
+            if (capacity > 0) {
+               ByteBuffer tail = transport.tail();
+               int min = Math.min(capacity, buffer.readableBytes());
+               tail.limit(min);
+               buffer.readBytes(tail);
+               lockedFlush();
+            } else {
+               zeroOrNegativeCapacity(capacity, buffer, transport);
+               break;
+            }
+         }
+      } finally {
+         buffer.release();
+      }
+   }
+
+   private static void zeroOrNegativeCapacity(int capacity, ByteBuf buffer, Transport transport) {
+      if (capacity == 0) {
+         log.debugf("abandoning: readableBytes=%d", buffer.readableBytes());
+      } else {
+         log.debugf("transport closed, discarding: readableBytes=%d, capacity=%d", buffer.readableBytes(), transport.capacity());
       }
    }
 
@@ -372,6 +404,14 @@ public class ProtonHandler extends ProtonInitializable {
       return creationTime;
    }
 
+   private void lockedFlush() {
+      assert lock.isHeldByCurrentThread();
+      transport.process();
+      checkSASL();
+      lockedDispatch();
+      lockedFlushBytes();
+   }
+
    public void flush() {
       lock.lock();
       try {
@@ -382,6 +422,7 @@ public class ProtonHandler extends ProtonInitializable {
       }
 
       dispatch();
+      flushBytes();
    }
 
    public void close(ErrorCondition errorCondition) {
@@ -398,104 +439,113 @@ public class ProtonHandler extends ProtonInitializable {
       flush();
    }
 
-   protected void checkSASL() {
-      if (isServer) {
-         if (sasl != null && sasl.getRemoteMechanisms().length > 0) {
+   private void checkServerRemoteMechanismsSASL() {
+      assert lock.isHeldByCurrentThread() && isServer && sasl != null && sasl.getRemoteMechanisms().length > 0;
+      if (chosenMechanism == null) {
+         if (log.isTraceEnabled()) {
+            log.trace("SASL chosenMechanism: " + sasl.getRemoteMechanisms()[0]);
+         }
+         dispatchRemoteMechanismChosen(sasl.getRemoteMechanisms()[0]);
+      }
+      if (chosenMechanism != null) {
 
-            if (chosenMechanism == null) {
-               if (log.isTraceEnabled()) {
-                  log.trace("SASL chosenMechanism: " + sasl.getRemoteMechanisms()[0]);
-               }
-               dispatchRemoteMechanismChosen(sasl.getRemoteMechanisms()[0]);
-            }
-            if (chosenMechanism != null) {
+         byte[] dataSASL = new byte[sasl.pending()];
+         int received = sasl.recv(dataSASL, 0, dataSASL.length);
+         if (log.isTraceEnabled()) {
+            log.trace("Working on sasl ::" + (received > 0 ? ByteUtil.bytesToHex(dataSASL, 2) : "recv:" + received));
+         }
 
-               byte[] dataSASL = new byte[sasl.pending()];
-               int received = sasl.recv(dataSASL, 0, dataSASL.length);
-               if (log.isTraceEnabled()) {
-                  log.trace("Working on sasl ::" + (received > 0 ? ByteUtil.bytesToHex(dataSASL, 2) : "recv:" + received));
-               }
+         byte[] response = null;
+         if (received != -1) {
+            response = chosenMechanism.processSASL(dataSASL);
+         }
+         if (response != null) {
+            sasl.send(response, 0, response.length);
+         }
+         saslResult = chosenMechanism.result();
 
-               byte[] response = null;
-               if (received != -1) {
-                  response = chosenMechanism.processSASL(dataSASL);
-               }
-               if (response != null) {
-                  sasl.send(response, 0, response.length);
-               }
-               saslResult = chosenMechanism.result();
-
-               if (saslResult != null) {
-                  if (saslResult.isSuccess()) {
-                     saslComplete(Sasl.SaslOutcome.PN_SASL_OK);
-                  } else {
-                     saslComplete(Sasl.SaslOutcome.PN_SASL_AUTH);
-                  }
-               }
+         if (saslResult != null) {
+            if (saslResult.isSuccess()) {
+               saslComplete(Sasl.SaslOutcome.PN_SASL_OK);
             } else {
-               // no auth available, system error
-               saslComplete(Sasl.SaslOutcome.PN_SASL_SYS);
+               saslComplete(Sasl.SaslOutcome.PN_SASL_AUTH);
             }
          }
       } else {
-         if (sasl != null) {
-            switch (sasl.getState()) {
-               case PN_SASL_IDLE:
-                  if (sasl.getRemoteMechanisms().length != 0) {
-                     dispatchMechanismsOffered(sasl.getRemoteMechanisms());
+         // no auth available, system error
+         saslComplete(Sasl.SaslOutcome.PN_SASL_SYS);
+      }
+   }
 
-                     if (clientSASLMechanism == null) {
-                        log.infof("Outbound connection failed - unknown mechanism, offered mechanisms: %s",
-                                  Arrays.asList(sasl.getRemoteMechanisms()));
-                        sasl = null;
-                        dispatchAuthFailed();
-                     } else {
-                        sasl.setMechanisms(clientSASLMechanism.getName());
-                        byte[] initialResponse = clientSASLMechanism.getInitialResponse();
-                        if (initialResponse != null) {
-                           sasl.send(initialResponse, 0, initialResponse.length);
-                        }
-                     }
-                  }
-                  break;
-               case PN_SASL_STEP:
-                  int challengeSize = sasl.pending();
-                  byte[] challenge = new byte[challengeSize];
-                  sasl.recv(challenge, 0, challengeSize);
-                  byte[] response = clientSASLMechanism.getResponse(challenge);
-                  sasl.send(response, 0, response.length);
-                  break;
-               case PN_SASL_FAIL:
-                  log.info("Outbound connection failed, authentication failure");
+   private void checkClientSASL() {
+      assert lock.isHeldByCurrentThread() && !isServer && sasl != null;
+      switch (sasl.getState()) {
+         case PN_SASL_IDLE:
+            if (sasl.getRemoteMechanisms().length != 0) {
+               dispatchMechanismsOffered(sasl.getRemoteMechanisms());
+
+               if (clientSASLMechanism == null) {
+                  log.infof("Outbound connection failed - unknown mechanism, offered mechanisms: %s", Arrays.asList(sasl.getRemoteMechanisms()));
                   sasl = null;
                   dispatchAuthFailed();
-                  break;
-               case PN_SASL_PASS:
-                  log.debug("Outbound connection succeeded");
-                  saslResult = new SASLResult() {
-                     @Override
-                     public String getUser() {
-                        return null;
-                     }
-
-                     @Override
-                     public Subject getSubject() {
-                        return null;
-                     }
-
-                     @Override
-                     public boolean isSuccess() {
-                        return true;
-                     }
-                  };
-                  sasl = null;
-
-                  dispatchAuthSuccess();
-                  break;
-               case PN_SASL_CONF:
-                  // do nothing
-                  break;
+               } else {
+                  sasl.setMechanisms(clientSASLMechanism.getName());
+                  byte[] initialResponse = clientSASLMechanism.getInitialResponse();
+                  if (initialResponse != null) {
+                     sasl.send(initialResponse, 0, initialResponse.length);
+                  }
+               }
             }
+            break;
+         case PN_SASL_STEP:
+            int challengeSize = sasl.pending();
+            byte[] challenge = new byte[challengeSize];
+            sasl.recv(challenge, 0, challengeSize);
+            byte[] response = clientSASLMechanism.getResponse(challenge);
+            sasl.send(response, 0, response.length);
+            break;
+         case PN_SASL_FAIL:
+            log.info("Outbound connection failed, authentication failure");
+            sasl = null;
+            dispatchAuthFailed();
+            break;
+         case PN_SASL_PASS:
+            log.debug("Outbound connection succeeded");
+            saslResult = new SASLResult() {
+               @Override
+               public String getUser() {
+                  return null;
+               }
+
+               @Override
+               public Subject getSubject() {
+                  return null;
+               }
+
+               @Override
+               public boolean isSuccess() {
+                  return true;
+               }
+            };
+            sasl = null;
+
+            dispatchAuthSuccess();
+            break;
+         case PN_SASL_CONF:
+            // do nothing
+            break;
+      }
+   }
+
+   private void checkSASL() {
+      assert lock.isHeldByCurrentThread();
+      if (isServer) {
+         if (sasl != null && sasl.getRemoteMechanisms().length > 0) {
+            checkServerRemoteMechanismsSASL();
+         }
+      } else {
+         if (sasl != null) {
+            checkClientSASL();
          }
       }
    }
@@ -537,46 +587,52 @@ public class ProtonHandler extends ProtonInitializable {
       }
    }
 
-   private void dispatch() {
-      Event ev;
+   private void onDispatchError(Throwable e) {
+      log.warn(e.getMessage(), e);
+      ErrorCondition error = new ErrorCondition();
+      error.setCondition(AmqpError.INTERNAL_ERROR);
+      error.setDescription("Unrecoverable error: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+      connection.setCondition(error);
+      connection.close();
+   }
 
-      lock.lock();
+   private void lockedDispatch() {
+      assert lock.isHeldByCurrentThread();
+
+      if (inDispatch) {
+         // Avoid recursion from events
+         return;
+      }
       try {
-         if (inDispatch) {
-            // Avoid recursion from events
-            return;
-         }
-         try {
-            inDispatch = true;
-            while ((ev = collector.peek()) != null) {
-               for (EventHandler h : handlers) {
-                  if (log.isTraceEnabled()) {
-                     log.trace("Handling " + ev + " towards " + h);
-                  }
-                  try {
-                     Events.dispatch(ev, h);
-                  } catch (Exception e) {
-                     log.warn(e.getMessage(), e);
-                     ErrorCondition error = new ErrorCondition();
-                     error.setCondition(AmqpError.INTERNAL_ERROR);
-                     error.setDescription("Unrecoverable error: " +
-                        (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-                     connection.setCondition(error);
-                     connection.close();
-                  }
+         inDispatch = true;
+         Event ev;
+         while ((ev = collector.peek()) != null) {
+            for (int i = 0, size = handlers.size(); i < size; i++) {
+               final EventHandler h = handlers.get(i);
+               if (log.isTraceEnabled()) {
+                  log.trace("Handling " + ev + " towards " + h);
                }
-
-               collector.pop();
+               try {
+                  Events.dispatch(ev, h);
+               } catch (Exception e) {
+                  onDispatchError(e);
+               }
             }
 
-         } finally {
-            inDispatch = false;
+            collector.pop();
          }
+      } finally {
+         inDispatch = false;
+      }
+   }
+
+   private void dispatch() {
+      lock.lock();
+      try {
+         lockedDispatch();
       } finally {
          lock.unlock();
       }
-
-      flushBytes();
    }
 
    public void open(String containerId, Map<Symbol, Object> connectionProperties) {
