@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import io.netty.buffer.ByteBuf;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.core.buffers.impl.ChannelBufferWrapper;
@@ -53,8 +54,6 @@ import org.apache.qpid.proton.amqp.Binary;
 import org.apache.qpid.proton.amqp.Symbol;
 import org.apache.qpid.proton.amqp.transport.AmqpError;
 import org.jboss.logging.Logger;
-
-import io.netty.buffer.ByteBuf;
 
 public class AMQPConnectionCallback implements FailureListener, CloseListener {
 
@@ -187,8 +186,12 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
       this.protonConnectionDelegate = protonConnectionDelegate;
    }
 
+   public void remoteFlush() {
+      connection.checkFlushBatchBuffer();
+   }
+
    public void onTransport(ByteBuf byteBuf, AMQPConnectionContext amqpConnection) {
-      connection.write(new ChannelBufferWrapper(byteBuf, true));
+      connection.write(new ChannelBufferWrapper(byteBuf, true), false, true);
    }
 
    public boolean isWritable(ReadyListener readyListener) {

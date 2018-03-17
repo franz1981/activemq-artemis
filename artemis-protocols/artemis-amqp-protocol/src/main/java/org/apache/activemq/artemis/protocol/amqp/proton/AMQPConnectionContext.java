@@ -348,6 +348,11 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
    }
 
    @Override
+   public void remoteFlush() {
+      connectionCallback.remoteFlush();
+   }
+
+   @Override
    public void pushBytes(ByteBuf bytes) {
       connectionCallback.onTransport(bytes, this);
    }

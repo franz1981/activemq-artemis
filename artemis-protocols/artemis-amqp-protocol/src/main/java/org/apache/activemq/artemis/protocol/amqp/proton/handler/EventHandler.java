@@ -85,6 +85,8 @@ public interface EventHandler {
 
    default void onTransport(Transport transport) throws Exception { }
 
+   default void remoteFlush() { }
+
    default void pushBytes(ByteBuf bytes) { }
 
    default boolean flowControl(ReadyListener readyListener) {

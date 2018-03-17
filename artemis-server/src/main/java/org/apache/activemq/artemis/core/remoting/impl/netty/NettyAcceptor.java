@@ -778,7 +778,7 @@ public class NettyAcceptor extends AbstractAcceptor {
             super.channelActive(ctx);
             Listener connectionListener = new Listener();
 
-            NettyServerConnection nc = new NettyServerConnection(configuration, ctx.channel(), connectionListener, !httpEnabled && batchDelay > 0, directDeliver);
+            NettyServerConnection nc = new NettyServerConnection(configuration, ctx.channel(), connectionListener, "AMQP".equals(protocol.toUpperCase()) || (!httpEnabled && batchDelay > 0), directDeliver);
 
             connectionListener.connectionCreated(NettyAcceptor.this, nc, protocolHandler.getProtocol(protocol));
 

@@ -279,17 +279,34 @@ public class ProtonHandler extends ProtonInitializable {
       }
    }
 
+   private void remoteFlush() {
+      for (int i = 0, size = handlers.size(); i < size; i++) {
+         final EventHandler handler = handlers.get(i);
+         handler.remoteFlush();
+      }
+   }
+
    private void doWorks() {
       consumerPreempt = false;
       //volatile store === StoreLoad
       do {
+         boolean remoteFlush = false;
          long tasks;
          do {
             tasks = 0;
             tasks += processInputBuffers(BATCH_SIZE);
             tasks += processProtonTasks(BATCH_SIZE);
+            if (tasks > 0) {
+               remoteFlush = true;
+            }
          }
          while (tasks > 0);
+         //it performs a batch flush request into Netty socket:
+         //it could be anticipated after each processInputBuffers/processProtonTasks calls too
+         //to tradeoff latencies on throughput
+         if (remoteFlush) {
+            remoteFlush();
+         }
          //no more work to do, we could preempt
          consumerPreempt = true;
          //volatile store === StoreLoad
