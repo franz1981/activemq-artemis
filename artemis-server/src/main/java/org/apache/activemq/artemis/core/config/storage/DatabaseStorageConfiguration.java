@@ -52,6 +52,8 @@ public class DatabaseStorageConfiguration implements StoreConfiguration {
 
    private long jdbcJournalSyncPeriodMillis = ActiveMQDefaultConfiguration.getDefaultJdbcJournalSyncPeriodMillis();
 
+   private long jdbcMaxAllowedMillisFromDbTime = ActiveMQDefaultConfiguration.getDefaultJdbcMaxAllowedMillisFromDbTime();
+
    @Override
    public StoreType getStoreType() {
       return StoreType.DATABASE;
@@ -176,6 +178,14 @@ public class DatabaseStorageConfiguration implements StoreConfiguration {
 
    public void setJdbcLockAcquisitionTimeoutMillis(long jdbcLockAcquisitionTimeoutMillis) {
       this.jdbcLockAcquisitionTimeoutMillis = jdbcLockAcquisitionTimeoutMillis;
+   }
+
+   public long getJdbcMaxAllowedMillisFromDbTime() {
+      return jdbcMaxAllowedMillisFromDbTime;
+   }
+
+   public void setJdbcMaxAllowedMillisFromDbTime(long jdbcMaxAllowedMillisFromDbTime) {
+      this.jdbcMaxAllowedMillisFromDbTime = jdbcMaxAllowedMillisFromDbTime;
    }
 
    public long getJdbcJournalSyncPeriodMillis() {
