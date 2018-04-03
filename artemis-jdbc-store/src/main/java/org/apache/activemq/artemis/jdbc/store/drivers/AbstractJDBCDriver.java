@@ -179,32 +179,61 @@ public abstract class AbstractJDBCDriver {
       logger.tracef("Validating if table %s didn't exist before creating", tableName);
       try {
          connection.setAutoCommit(false);
+         final boolean tableExists;
          try (ResultSet rs = connection.getMetaData().getTables(null, null, tableName, null)) {
-            if (rs != null && !rs.next()) {
+            if ((rs == null) || (rs != null && !rs.next())) {
+               tableExists = false;
                if (logger.isTraceEnabled()) {
                   logger.tracef("Table %s did not exist, creating it with SQL=%s", tableName, Arrays.toString(sqls));
                }
-               final SQLWarning sqlWarning = rs.getWarnings();
-               if (sqlWarning != null) {
-                  logger.warn(JDBCUtils.appendSQLExceptionDetails(new StringBuilder(), sqlWarning));
+               if (rs != null) {
+                  final SQLWarning sqlWarning = rs.getWarnings();
+                  if (sqlWarning != null) {
+                     logger.warn(JDBCUtils.appendSQLExceptionDetails(new StringBuilder(), sqlWarning));
+                  }
                }
             } else {
-               try (Statement statement = connection.createStatement();
-                     ResultSet cntRs = statement.executeQuery(sqlProvider.getCountJournalRecordsSQL())) {
-                  if (rs.next() && rs.getInt(1) > 0) {
-                     logger.tracef("Table %s did exist but is not empty. Skipping initialization.", tableName);
-                  } else {
-                     sqls = Arrays.copyOfRange(sqls, 1, sqls.length);
-                  }
-               }
+               tableExists = true;
             }
-            try (Statement statement = connection.createStatement()) {
-               for (String sql : sqls) {
-                  statement.executeUpdate(sql);
-                  final SQLWarning statementSqlWarning = statement.getWarnings();
-                  if (statementSqlWarning != null) {
-                     logger.warn(JDBCUtils.appendSQLExceptionDetails(new StringBuilder(), statementSqlWarning, sql));
+         }
+         if (tableExists) {
+            logger.tracef("Validating if the existing table %s is initialized or not", tableName);
+            try (Statement statement = connection.createStatement();
+                 ResultSet cntRs = statement.executeQuery(sqlProvider.getCountJournalRecordsSQL())) {
+               logger.tracef("Validation of the existing table %s initialization is started", tableName);
+               int rows;
+               if (cntRs.next() && (rows = cntRs.getInt(1)) > 0) {
+                  logger.tracef("Table %s did exist but is not empty. Skipping initialization. Found %d rows.", tableName, rows);
+                  if (logger.isDebugEnabled()) {
+                     final long expectedRows = Stream.of(sqls).map(String::toUpperCase).filter(sql -> sql.contains("INSERT INTO")).count();
+                     if (rows < expectedRows) {
+                        logger.debug("Table " + tableName + " was expected to contain " + expectedRows + " rows while it has " + rows + " rows.");
+                     }
                   }
+                  connection.commit();
+                  return;
+               } else {
+                  assert sqls[0].toUpperCase().contains("CREATE TABLE") : "The first SQL statement must be a CREATE TABLE";
+                  sqls = Arrays.copyOfRange(sqls, 1, sqls.length);
+                  logger.tracef("Table %s did exist but is empty. Starting initialization.", tableName);
+               }
+            } catch (SQLException e) {
+               logger.warn(JDBCUtils.appendSQLExceptionDetails(new StringBuilder("Can't verify the initialization of table ").append(tableName).append(" due to:"), e, sqlProvider.getCountJournalRecordsSQL()));
+               try {
+                  connection.rollback();
+               } catch (SQLException rollbackEx) {
+                  logger.debug("Rollback failed while validating initialization of a table", rollbackEx);
+               }
+               connection.setAutoCommit(false);
+               logger.tracef("Table %s seems to exist, but we can't verify the initalization. Keep trying to create and initialize.", tableName);
+            }
+         }
+         try (Statement statement = connection.createStatement()) {
+            for (String sql : sqls) {
+               statement.executeUpdate(sql);
+               final SQLWarning statementSqlWarning = statement.getWarnings();
+               if (statementSqlWarning != null) {
+                  logger.warn(JDBCUtils.appendSQLExceptionDetails(new StringBuilder(), statementSqlWarning, sql));
                }
             }
          }
