@@ -35,12 +35,12 @@ final class JdbcLeaseLock implements LeaseLock {
    private static final Logger LOGGER = Logger.getLogger(JdbcLeaseLock.class);
    private static final int MAX_HOLDER_ID_LENGTH = 128;
    private final Connection connection;
-   private long millisDiffFromDbTime;
    private final String holderId;
    private final PreparedStatement tryAcquireLock;
    private final PreparedStatement tryReleaseLock;
    private final PreparedStatement renewLock;
    private final PreparedStatement isLocked;
+   private final PreparedStatement currentDateTime;
    private final long expirationMillis;
    private boolean maybeAcquired;
 
@@ -54,17 +54,17 @@ final class JdbcLeaseLock implements LeaseLock {
                  PreparedStatement tryReleaseLock,
                  PreparedStatement renewLock,
                  PreparedStatement isLocked,
-                 long expirationMIllis,
-                 long millisDiffFromDbTime) {
+                 PreparedStatement currentDateTime,
+                 long expirationMIllis) {
       if (holderId.length() > MAX_HOLDER_ID_LENGTH) {
          throw new IllegalArgumentException("holderId length must be <=" + MAX_HOLDER_ID_LENGTH);
       }
       this.holderId = holderId;
-      this.millisDiffFromDbTime = millisDiffFromDbTime;
       this.tryAcquireLock = tryAcquireLock;
       this.tryReleaseLock = tryReleaseLock;
       this.renewLock = renewLock;
       this.isLocked = isLocked;
+      this.currentDateTime = currentDateTime;
       this.expirationMillis = expirationMIllis;
       this.maybeAcquired = false;
       this.connection = connection;
@@ -79,8 +79,11 @@ final class JdbcLeaseLock implements LeaseLock {
       return expirationMillis;
    }
 
-   private long timeDifference() {
-      return millisDiffFromDbTime;
+   private long dbCurrentTimeMillis() throws SQLException {
+      try (ResultSet resultSet = currentDateTime.executeQuery()) {
+         resultSet.next();
+         return resultSet.getTimestamp(1).getTime();
+      }
    }
 
    @Override
@@ -90,12 +93,12 @@ final class JdbcLeaseLock implements LeaseLock {
             final boolean result;
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = this.renewLock;
-               final long now = System.currentTimeMillis() + timeDifference;
-               final Timestamp timestamp = new Timestamp(now + expirationMillis);
-               preparedStatement.setTimestamp(1, timestamp);
+               final long now = dbCurrentTimeMillis();
+               final Timestamp expirationTime = new Timestamp(now + expirationMillis);
+               preparedStatement.setTimestamp(1, expirationTime);
                preparedStatement.setString(2, holderId);
+               preparedStatement.setTimestamp(3, expirationTime);
                result = preparedStatement.executeUpdate() == 1;
             } catch (SQLException ie) {
                connection.rollback();
@@ -118,12 +121,12 @@ final class JdbcLeaseLock implements LeaseLock {
             final boolean acquired;
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = tryAcquireLock;
-               final long now = System.currentTimeMillis() + timeDifference;
+               final long now = dbCurrentTimeMillis();
                preparedStatement.setString(1, holderId);
-               final Timestamp timestamp = new Timestamp(now + expirationMillis);
-               preparedStatement.setTimestamp(2, timestamp);
+               final Timestamp expirationTime = new Timestamp(now + expirationMillis);
+               preparedStatement.setTimestamp(2, expirationTime);
+               preparedStatement.setTimestamp(3, expirationTime);
                acquired = preparedStatement.executeUpdate() == 1;
             } catch (SQLException ie) {
                connection.rollback();
@@ -161,7 +164,6 @@ final class JdbcLeaseLock implements LeaseLock {
             boolean result;
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = this.isLocked;
                try (ResultSet resultSet = preparedStatement.executeQuery()) {
                   if (!resultSet.next()) {
@@ -170,10 +172,10 @@ final class JdbcLeaseLock implements LeaseLock {
                      final String currentHolderId = resultSet.getString(1);
                      result = holderIdFilter.test(currentHolderId);
                      //warn about any zombie lock
-                     final Timestamp timestamp = resultSet.getTimestamp(2);
-                     if (timestamp != null) {
-                        final long lockExpirationTime = timestamp.getTime();
-                        final long now = System.currentTimeMillis() + timeDifference;
+                     final Timestamp expirationTime = resultSet.getTimestamp(2);
+                     if (expirationTime != null) {
+                        final long lockExpirationTime = expirationTime.getTime();
+                        final long now = resultSet.getTimestamp(3).getTime();
                         final long expiredBy = now - lockExpirationTime;
                         if (expiredBy > 0) {
                            result = false;
@@ -242,6 +244,7 @@ final class JdbcLeaseLock implements LeaseLock {
                this.tryAcquireLock.close();
                this.renewLock.close();
                this.isLocked.close();
+               this.currentDateTime.close();
             }
          }
       }

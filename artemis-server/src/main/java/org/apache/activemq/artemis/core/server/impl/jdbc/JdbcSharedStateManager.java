@@ -49,7 +49,6 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
    private PreparedStatement initializeNodeId;
    private PreparedStatement readState;
    private PreparedStatement writeState;
-   private long timeDifferenceMillisFromDb = 0;
 
    public static JdbcSharedStateManager usingDataSource(String holderId,
                                                         long locksExpirationMillis,
@@ -125,24 +124,22 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
    static JdbcLeaseLock createLiveLock(String holderId,
                                        Connection connection,
                                        SQLProvider sqlProvider,
-                                       long expirationMillis,
-                                       long timeDifferenceMillisFromDb) throws SQLException {
-      return new JdbcLeaseLock(holderId, connection, connection.prepareStatement(sqlProvider.tryAcquireLiveLockSQL()), connection.prepareStatement(sqlProvider.tryReleaseLiveLockSQL()), connection.prepareStatement(sqlProvider.renewLiveLockSQL()), connection.prepareStatement(sqlProvider.isLiveLockedSQL()), expirationMillis, timeDifferenceMillisFromDb);
+                                       long expirationMillis) throws SQLException {
+      return new JdbcLeaseLock(holderId, connection, connection.prepareStatement(sqlProvider.tryAcquireLiveLockSQL()), connection.prepareStatement(sqlProvider.tryReleaseLiveLockSQL()), connection.prepareStatement(sqlProvider.renewLiveLockSQL()), connection.prepareStatement(sqlProvider.isLiveLockedSQL()), connection.prepareStatement(sqlProvider.currentTimestampSQL()), expirationMillis);
    }
 
    static JdbcLeaseLock createBackupLock(String holderId,
                                          Connection connection,
                                          SQLProvider sqlProvider,
-                                         long expirationMillis,
-                                         long timeDifferenceMillisFromDb) throws SQLException {
-      return new JdbcLeaseLock(holderId, connection, connection.prepareStatement(sqlProvider.tryAcquireBackupLockSQL()), connection.prepareStatement(sqlProvider.tryReleaseBackupLockSQL()), connection.prepareStatement(sqlProvider.renewBackupLockSQL()), connection.prepareStatement(sqlProvider.isBackupLockedSQL()), expirationMillis, timeDifferenceMillisFromDb);
+                                         long expirationMillis) throws SQLException {
+      return new JdbcLeaseLock(holderId, connection, connection.prepareStatement(sqlProvider.tryAcquireBackupLockSQL()), connection.prepareStatement(sqlProvider.tryReleaseBackupLockSQL()), connection.prepareStatement(sqlProvider.renewBackupLockSQL()), connection.prepareStatement(sqlProvider.isBackupLockedSQL()), connection.prepareStatement(sqlProvider.currentTimestampSQL()), expirationMillis);
    }
 
    @Override
    protected void prepareStatements() throws SQLException {
-      final long timeDifferenceMillisFromDb = validateTimeDifferenceMillisFromDb();
-      this.liveLock = createLiveLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis, timeDifferenceMillisFromDb);
-      this.backupLock = createBackupLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis, timeDifferenceMillisFromDb);
+      validateTimeDifferenceMillisFromDb();
+      this.liveLock = createLiveLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis);
+      this.backupLock = createBackupLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis);
       this.readNodeId = connection.prepareStatement(sqlProvider.readNodeIdSQL());
       this.writeNodeId = connection.prepareStatement(sqlProvider.writeNodeIdSQL());
       this.initializeNodeId = connection.prepareStatement(sqlProvider.initializeNodeIdSQL());
@@ -150,16 +147,8 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
       this.readState = connection.prepareStatement(sqlProvider.readStateSQL());
    }
 
-   /**
-    * It will be populated only after a {@link #start()}.
-    */
-   long timeDifferenceMillisFromDb() {
-      return timeDifferenceMillisFromDb;
-   }
-
    private long validateTimeDifferenceMillisFromDb() throws SQLException {
       final long timeDifferenceMillisFromDb = timeDifferenceMillisFromDb(connection, sqlProvider);
-      this.timeDifferenceMillisFromDb = timeDifferenceMillisFromDb;
       final long absoluteTimeDifference = Math.abs(timeDifferenceMillisFromDb);
       if (absoluteTimeDifference > maxAllowedMillisFromDbTime) {
          throw new IllegalStateException("The system is far " + (-timeDifferenceMillisFromDb) + " milliseconds from DB time, exceeding maxAllowedMillisFromDbTime = " + maxAllowedMillisFromDbTime);
