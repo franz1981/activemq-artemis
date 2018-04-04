@@ -23,6 +23,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import org.jboss.logging.Logger;
@@ -35,14 +36,15 @@ final class JdbcLeaseLock implements LeaseLock {
    private static final Logger LOGGER = Logger.getLogger(JdbcLeaseLock.class);
    private static final int MAX_HOLDER_ID_LENGTH = 128;
    private final Connection connection;
-   private long millisDiffFromDbTime;
    private final String holderId;
    private final PreparedStatement tryAcquireLock;
    private final PreparedStatement tryReleaseLock;
    private final PreparedStatement renewLock;
    private final PreparedStatement isLocked;
+   private final PreparedStatement currentDateTime;
    private final long expirationMillis;
    private boolean maybeAcquired;
+   private final String lockName;
 
    /**
     * The lock will be responsible (ie {@link #close()}) of all the {@link PreparedStatement}s used by it, but not of the {@link Connection},
@@ -54,20 +56,22 @@ final class JdbcLeaseLock implements LeaseLock {
                  PreparedStatement tryReleaseLock,
                  PreparedStatement renewLock,
                  PreparedStatement isLocked,
+                 PreparedStatement currentDateTime,
                  long expirationMIllis,
-                 long millisDiffFromDbTime) {
+                 String lockName) {
       if (holderId.length() > MAX_HOLDER_ID_LENGTH) {
          throw new IllegalArgumentException("holderId length must be <=" + MAX_HOLDER_ID_LENGTH);
       }
       this.holderId = holderId;
-      this.millisDiffFromDbTime = millisDiffFromDbTime;
       this.tryAcquireLock = tryAcquireLock;
       this.tryReleaseLock = tryReleaseLock;
       this.renewLock = renewLock;
       this.isLocked = isLocked;
+      this.currentDateTime = currentDateTime;
       this.expirationMillis = expirationMIllis;
       this.maybeAcquired = false;
       this.connection = connection;
+      this.lockName = lockName;
    }
 
    public String holderId() {
@@ -79,24 +83,70 @@ final class JdbcLeaseLock implements LeaseLock {
       return expirationMillis;
    }
 
-   private long timeDifference() {
-      return millisDiffFromDbTime;
+   private String readableLockStatus() {
+      try {
+         String result;
+         connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+         connection.setAutoCommit(false);
+         try {
+            final PreparedStatement preparedStatement = this.isLocked;
+            try (ResultSet resultSet = preparedStatement.executeQuery()) {
+               if (!resultSet.next()) {
+                  result = null;
+               } else {
+                  final String currentHolderId = resultSet.getString(1);
+                  final Timestamp expirationTime = resultSet.getTimestamp(2);
+                  final Timestamp currentTimestamp = resultSet.getTimestamp(3);
+                  result = "holderId = " + currentHolderId + " expirationTime = " + expirationTime + " currentTimestamp = " + currentTimestamp;
+               }
+            }
+         } catch (SQLException ie) {
+            connection.rollback();
+            connection.setAutoCommit(true);
+            return ie.getMessage();
+         }
+         connection.commit();
+         connection.setAutoCommit(true);
+         return result;
+      } catch (SQLException e) {
+         return e.getMessage();
+      }
+   }
+
+   private long dbCurrentTimeMillis() throws SQLException {
+      final long start = System.nanoTime();
+      try (ResultSet resultSet = currentDateTime.executeQuery()) {
+         resultSet.next();
+         final Timestamp currentTimestamp = resultSet.getTimestamp(1);
+         final long elapsedTime = System.nanoTime() - start;
+         if (LOGGER.isDebugEnabled()) {
+            LOGGER.debug("[" + lockName + "] " + holderId + " query currentTimestamp = " + currentTimestamp +
+                            "  taking " + TimeUnit.NANOSECONDS.toMillis(elapsedTime) + " ms");
+         }
+         return currentTimestamp.getTime();
+      }
    }
 
    @Override
    public boolean renew() {
       synchronized (connection) {
          try {
-            final boolean result;
+            final boolean renewed;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = this.renewLock;
-               final long now = System.currentTimeMillis() + timeDifference;
-               final Timestamp timestamp = new Timestamp(now + expirationMillis);
-               preparedStatement.setTimestamp(1, timestamp);
+               final long now = dbCurrentTimeMillis();
+               final Timestamp expirationTime = new Timestamp(now + expirationMillis);
+               if (LOGGER.isDebugEnabled()) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " is renewing lock with expirationTime = " + expirationTime);
+               }
+               preparedStatement.setTimestamp(1, expirationTime);
                preparedStatement.setString(2, holderId);
-               result = preparedStatement.executeUpdate() == 1;
+               preparedStatement.setTimestamp(3, expirationTime);
+               preparedStatement.setTimestamp(4, expirationTime);
+               final int updatedRows = preparedStatement.executeUpdate();
+               renewed = updatedRows == 1;
             } catch (SQLException ie) {
                connection.rollback();
                connection.setAutoCommit(true);
@@ -104,7 +154,14 @@ final class JdbcLeaseLock implements LeaseLock {
             }
             connection.commit();
             connection.setAutoCommit(true);
-            return result;
+            if (LOGGER.isDebugEnabled()) {
+               if (!renewed) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has failed to renew lock: lock status = { " + readableLockStatus() + " }");
+               } else {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has renewed lock");
+               }
+            }
+            return renewed;
          } catch (SQLException e) {
             throw new IllegalStateException(e);
          }
@@ -116,14 +173,18 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             final boolean acquired;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = tryAcquireLock;
-               final long now = System.currentTimeMillis() + timeDifference;
+               final long now = dbCurrentTimeMillis();
                preparedStatement.setString(1, holderId);
-               final Timestamp timestamp = new Timestamp(now + expirationMillis);
-               preparedStatement.setTimestamp(2, timestamp);
+               final Timestamp expirationTime = new Timestamp(now + expirationMillis);
+               preparedStatement.setTimestamp(2, expirationTime);
+               preparedStatement.setTimestamp(3, expirationTime);
+               if (LOGGER.isDebugEnabled()) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " is trying to acquire lock with expirationTime " + expirationTime);
+               }
                acquired = preparedStatement.executeUpdate() == 1;
             } catch (SQLException ie) {
                connection.rollback();
@@ -135,7 +196,11 @@ final class JdbcLeaseLock implements LeaseLock {
             if (acquired) {
                this.maybeAcquired = true;
                if (LOGGER.isDebugEnabled()) {
-                  LOGGER.debug(holderId + " has acquired a lock");
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has acquired lock");
+               }
+            } else {
+               if (LOGGER.isDebugEnabled()) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has failed to acquire lock: lock status = { " + readableLockStatus() + " }");
                }
             }
             return acquired;
@@ -159,9 +224,9 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             boolean result;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
-               final long timeDifference = timeDifference();
                final PreparedStatement preparedStatement = this.isLocked;
                try (ResultSet resultSet = preparedStatement.executeQuery()) {
                   if (!resultSet.next()) {
@@ -169,18 +234,24 @@ final class JdbcLeaseLock implements LeaseLock {
                   } else {
                      final String currentHolderId = resultSet.getString(1);
                      result = holderIdFilter.test(currentHolderId);
-                     //warn about any zombie lock
-                     final Timestamp timestamp = resultSet.getTimestamp(2);
-                     if (timestamp != null) {
-                        final long lockExpirationTime = timestamp.getTime();
-                        final long now = System.currentTimeMillis() + timeDifference;
-                        final long expiredBy = now - lockExpirationTime;
+                     final Timestamp expirationTime = resultSet.getTimestamp(2);
+                     final Timestamp currentTimestamp = resultSet.getTimestamp(3);
+                     final long currentTimestampMillis = currentTimestamp.getTime();
+                     boolean zombie = false;
+                     if (expirationTime != null) {
+                        final long lockExpirationTime = expirationTime.getTime();
+                        final long expiredBy = currentTimestampMillis - lockExpirationTime;
                         if (expiredBy > 0) {
                            result = false;
-                           if (LOGGER.isDebugEnabled()) {
-                              LOGGER.debug("found zombie lock with holderId: " + currentHolderId + " expired by: " + expiredBy + " ms");
-                           }
+                           zombie = true;
                         }
+                     }
+                     if (LOGGER.isDebugEnabled()) {
+                        LOGGER.debug("[" + lockName + "] " + holderId +
+                                        " has found " + (zombie ? "zombie lock" : "lock") +
+                                        " with holderId = " + currentHolderId +
+                                        " expirationTime = " + expirationTime +
+                                        " currentTimestamp = " + currentTimestamp);
                      }
                   }
                }
@@ -202,17 +273,13 @@ final class JdbcLeaseLock implements LeaseLock {
    public void release() {
       synchronized (connection) {
          try {
+            final boolean released;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
                final PreparedStatement preparedStatement = this.tryReleaseLock;
                preparedStatement.setString(1, holderId);
-               if (preparedStatement.executeUpdate() != 1) {
-                  LOGGER.warn(holderId + " has failed to release a lock");
-               } else {
-                  if (LOGGER.isDebugEnabled()) {
-                     LOGGER.debug(holderId + " has released a lock");
-                  }
-               }
+               released = preparedStatement.executeUpdate() == 1;
                //consider it as released to avoid on finalize to be reclaimed
                this.maybeAcquired = false;
             } catch (SQLException ie) {
@@ -222,6 +289,15 @@ final class JdbcLeaseLock implements LeaseLock {
             }
             connection.commit();
             connection.setAutoCommit(true);
+            if (!released) {
+               if (LOGGER.isDebugEnabled()) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has failed to release a lock. Lock status = { " + readableLockStatus() + " }");
+               }
+            } else {
+               if (LOGGER.isDebugEnabled()) {
+                  LOGGER.debug("[" + lockName + "] " + holderId + " has released a lock");
+               }
+            }
          } catch (SQLException e) {
             throw new IllegalStateException(e);
          }
@@ -242,6 +318,7 @@ final class JdbcLeaseLock implements LeaseLock {
                this.tryAcquireLock.close();
                this.renewLock.close();
                this.isLocked.close();
+               this.currentDateTime.close();
             }
          }
       }
