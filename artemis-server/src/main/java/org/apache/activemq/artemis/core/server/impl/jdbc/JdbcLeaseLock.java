@@ -99,6 +99,7 @@ final class JdbcLeaseLock implements LeaseLock {
                preparedStatement.setTimestamp(1, expirationTime);
                preparedStatement.setString(2, holderId);
                preparedStatement.setTimestamp(3, expirationTime);
+               preparedStatement.setTimestamp(4, expirationTime);
                result = preparedStatement.executeUpdate() == 1;
             } catch (SQLException ie) {
                connection.rollback();
