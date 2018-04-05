@@ -22,8 +22,6 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Timestamp;
 import java.util.function.Supplier;
 
 import org.apache.activemq.artemis.jdbc.store.drivers.AbstractJDBCDriver;
@@ -41,7 +39,6 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
    public static final int MAX_SETUP_ATTEMPTS = 20;
    private final String holderId;
    private final long lockExpirationMillis;
-   private final long maxAllowedMillisFromDbTime;
    private JdbcLeaseLock liveLock;
    private JdbcLeaseLock backupLock;
    private PreparedStatement readNodeId;
@@ -52,10 +49,9 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
 
    public static JdbcSharedStateManager usingDataSource(String holderId,
                                                         long locksExpirationMillis,
-                                                        long maxAllowedMillisFromDbTime,
                                                         DataSource dataSource,
                                                         SQLProvider provider) {
-      final JdbcSharedStateManager sharedStateManager = new JdbcSharedStateManager(holderId, locksExpirationMillis, maxAllowedMillisFromDbTime);
+      final JdbcSharedStateManager sharedStateManager = new JdbcSharedStateManager(holderId, locksExpirationMillis);
       sharedStateManager.setDataSource(dataSource);
       sharedStateManager.setSqlProvider(provider);
       try {
@@ -68,11 +64,10 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
 
    public static JdbcSharedStateManager usingConnectionUrl(String holderId,
                                                            long locksExpirationMillis,
-                                                           long maxAllowedMillisFromDbTime,
                                                            String jdbcConnectionUrl,
                                                            String jdbcDriverClass,
                                                            SQLProvider provider) {
-      final JdbcSharedStateManager sharedStateManager = new JdbcSharedStateManager(holderId, locksExpirationMillis, maxAllowedMillisFromDbTime);
+      final JdbcSharedStateManager sharedStateManager = new JdbcSharedStateManager(holderId, locksExpirationMillis);
       sharedStateManager.setJdbcConnectionUrl(jdbcConnectionUrl);
       sharedStateManager.setJdbcDriverClass(jdbcDriverClass);
       sharedStateManager.setSqlProvider(provider);
@@ -96,31 +91,6 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
       }
    }
 
-   /**
-    * It computes the distance in milliseconds of {@link System#currentTimeMillis()} from the DBMS time.<br>
-    * It must be added to {@link System#currentTimeMillis()} in order to approximate the DBMS time.
-    * It will create a transaction by its own.
-    */
-   static long timeDifferenceMillisFromDb(Connection connection, SQLProvider sqlProvider) throws SQLException {
-      try (Statement statement = connection.createStatement()) {
-         connection.setAutoCommit(false);
-         final long result;
-         try (ResultSet resultSet = statement.executeQuery(sqlProvider.currentTimestampSQL())) {
-            resultSet.next();
-            final Timestamp timestamp = resultSet.getTimestamp(1);
-            final long systemNow = System.currentTimeMillis();
-            result = timestamp.getTime() - systemNow;
-         } catch (SQLException ie) {
-            connection.rollback();
-            connection.setAutoCommit(true);
-            throw ie;
-         }
-         connection.commit();
-         connection.setAutoCommit(true);
-         return result;
-      }
-   }
-
    static JdbcLeaseLock createLiveLock(String holderId,
                                        Connection connection,
                                        SQLProvider sqlProvider,
@@ -137,7 +107,6 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
 
    @Override
    protected void prepareStatements() throws SQLException {
-      validateTimeDifferenceMillisFromDb();
       this.liveLock = createLiveLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis);
       this.backupLock = createBackupLock(this.holderId, this.connection, sqlProvider, lockExpirationMillis);
       this.readNodeId = connection.prepareStatement(sqlProvider.readNodeIdSQL());
@@ -147,24 +116,9 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
       this.readState = connection.prepareStatement(sqlProvider.readStateSQL());
    }
 
-   private long validateTimeDifferenceMillisFromDb() throws SQLException {
-      final long timeDifferenceMillisFromDb = timeDifferenceMillisFromDb(connection, sqlProvider);
-      final long absoluteTimeDifference = Math.abs(timeDifferenceMillisFromDb);
-      if (absoluteTimeDifference > maxAllowedMillisFromDbTime) {
-         throw new IllegalStateException("The system is far " + (-timeDifferenceMillisFromDb) + " milliseconds from DB time, exceeding maxAllowedMillisFromDbTime = " + maxAllowedMillisFromDbTime);
-      }
-      if (absoluteTimeDifference > 0) {
-         final String msg = "The system is far " + timeDifferenceMillisFromDb + " milliseconds from DB time";
-         final Logger.Level logLevel = absoluteTimeDifference > lockExpirationMillis ? Logger.Level.WARN : Logger.Level.DEBUG;
-         logger.log(logLevel, msg);
-      }
-      return timeDifferenceMillisFromDb;
-   }
-
-   private JdbcSharedStateManager(String holderId, long lockExpirationMillis, long maxAllowedMillisFromDbTime) {
+   private JdbcSharedStateManager(String holderId, long lockExpirationMillis) {
       this.holderId = holderId;
       this.lockExpirationMillis = lockExpirationMillis;
-      this.maxAllowedMillisFromDbTime = maxAllowedMillisFromDbTime;
    }
 
    @Override

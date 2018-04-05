@@ -68,7 +68,6 @@ public class JdbcLeaseLockTest extends ActiveMQTestBase {
          .usingConnectionUrl(
             UUID.randomUUID().toString(),
             dbConf.getJdbcLockExpirationMillis(),
-            dbConf.getJdbcMaxAllowedMillisFromDbTime(),
             dbConf.getJdbcConnectionUrl(),
             dbConf.getJdbcDriverClassName(),
             sqlProvider);
