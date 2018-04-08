@@ -290,16 +290,24 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
       synchronized (connection) {
          try {
             connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
-            connection.setAutoCommit(true);
+            connection.setAutoCommit(false);
             final State state;
-            final PreparedStatement preparedStatement = this.readState;
-            try (ResultSet resultSet = preparedStatement.executeQuery()) {
-               if (!resultSet.next()) {
-                  state = State.FIRST_TIME_START;
-               } else {
-                  state = decodeState(resultSet.getString(1));
+            try {
+               final PreparedStatement preparedStatement = this.readState;
+               try (ResultSet resultSet = preparedStatement.executeQuery()) {
+                  if (!resultSet.next()) {
+                     state = State.FIRST_TIME_START;
+                  } else {
+                     state = decodeState(resultSet.getString(1));
+                  }
                }
+            } catch (SQLException ie) {
+               connection.rollback();
+               connection.setAutoCommit(true);
+               throw new IllegalStateException(ie);
             }
+            connection.commit();
+            connection.setAutoCommit(true);
             return state;
          } catch (SQLException e) {
             throw new IllegalStateException(e);
@@ -313,12 +321,20 @@ final class JdbcSharedStateManager extends AbstractJDBCDriver implements SharedS
       synchronized (connection) {
          try {
             connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
-            connection.setAutoCommit(true);
-            final PreparedStatement preparedStatement = this.writeState;
-            preparedStatement.setString(1, encodedState);
-            if (preparedStatement.executeUpdate() != 1) {
-               throw new IllegalStateException("can't write STATE to the JDBC Node Manager Store!");
+            connection.setAutoCommit(false);
+            try {
+               final PreparedStatement preparedStatement = this.writeState;
+               preparedStatement.setString(1, encodedState);
+               if (preparedStatement.executeUpdate() != 1) {
+                  throw new IllegalStateException("can't write STATE to the JDBC Node Manager Store!");
+               }
+            } catch (SQLException ie) {
+               connection.rollback();
+               connection.setAutoCommit(true);
+               throw new IllegalStateException(ie);
             }
+            connection.commit();
+            connection.setAutoCommit(true);
          } catch (SQLException e) {
             throw new IllegalStateException(e);
          }

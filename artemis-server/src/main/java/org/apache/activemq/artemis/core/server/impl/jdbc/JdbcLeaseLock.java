@@ -86,6 +86,7 @@ final class JdbcLeaseLock implements LeaseLock {
    private String readableLockStatus() {
       try {
          String result;
+         connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
          connection.setAutoCommit(false);
          try {
             final PreparedStatement preparedStatement = this.isLocked;
@@ -131,6 +132,7 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             final boolean renewed;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
                final PreparedStatement preparedStatement = this.renewLock;
@@ -171,6 +173,7 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             final boolean acquired;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
                final PreparedStatement preparedStatement = tryAcquireLock;
@@ -221,6 +224,7 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             boolean result;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
                final PreparedStatement preparedStatement = this.isLocked;
@@ -270,6 +274,7 @@ final class JdbcLeaseLock implements LeaseLock {
       synchronized (connection) {
          try {
             final boolean released;
+            connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             connection.setAutoCommit(false);
             try {
                final PreparedStatement preparedStatement = this.tryReleaseLock;
