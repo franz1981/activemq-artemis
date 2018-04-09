@@ -60,6 +60,7 @@ public final class JdbcNodeManager extends NodeManager {
                                       ScheduledExecutorService scheduledExecutorService,
                                       ExecutorFactory executorFactory,
                                       IOCriticalErrorListener ioCriticalErrorListener) {
+      validateTimeoutConfiguration(configuration);
       if (configuration.getDataSource() != null) {
          final SQLProvider.Factory sqlProviderFactory;
          if (configuration.getSqlProviderFactory() != null) {
@@ -69,6 +70,7 @@ public final class JdbcNodeManager extends NodeManager {
          }
          final String brokerId = java.util.UUID.randomUUID().toString();
          return usingDataSource(brokerId,
+                                configuration.getJdbcNetworkTimeout(),
                                 configuration.getJdbcLockExpirationMillis(),
                                 configuration.getJdbcLockRenewPeriodMillis(),
                                 configuration.getJdbcLockAcquisitionTimeoutMillis(),
@@ -81,6 +83,7 @@ public final class JdbcNodeManager extends NodeManager {
          final SQLProvider sqlProvider = JDBCUtils.getSQLProvider(configuration.getJdbcDriverClassName(), configuration.getNodeManagerStoreTableName(), SQLProvider.DatabaseStoreType.NODE_MANAGER);
          final String brokerId = java.util.UUID.randomUUID().toString();
          return usingConnectionUrl(brokerId,
+                                   configuration.getJdbcNetworkTimeout(),
                                    configuration.getJdbcLockExpirationMillis(),
                                    configuration.getJdbcLockRenewPeriodMillis(),
                                    configuration.getJdbcLockAcquisitionTimeoutMillis(),
@@ -93,17 +96,23 @@ public final class JdbcNodeManager extends NodeManager {
       }
    }
 
-   static JdbcNodeManager usingDataSource(String brokerId,
-                                          long lockExpirationMillis,
-                                          long lockRenewPeriodMillis,
-                                          long lockAcquisitionTimeoutMillis,
-                                          DataSource dataSource,
-                                          SQLProvider provider,
-                                          ScheduledExecutorService scheduledExecutorService,
-                                          ExecutorFactory executorFactory,
-                                          IOCriticalErrorListener ioCriticalErrorListener) {
+   private static JdbcNodeManager usingDataSource(String brokerId,
+                                                  int networkTimeoutMillis,
+                                                  long lockExpirationMillis,
+                                                  long lockRenewPeriodMillis,
+                                                  long lockAcquisitionTimeoutMillis,
+                                                  DataSource dataSource,
+                                                  SQLProvider provider,
+                                                  ScheduledExecutorService scheduledExecutorService,
+                                                  ExecutorFactory executorFactory,
+                                                  IOCriticalErrorListener ioCriticalErrorListener) {
       return new JdbcNodeManager(
-         () -> JdbcSharedStateManager.usingDataSource(brokerId, lockExpirationMillis, dataSource, provider),
+         () -> JdbcSharedStateManager.usingDataSource(brokerId,
+                                                      networkTimeoutMillis,
+                                                      executorFactory == null ? null : executorFactory.getExecutor(),
+                                                      lockExpirationMillis,
+                                                      dataSource,
+                                                      provider),
          lockRenewPeriodMillis,
          lockAcquisitionTimeoutMillis,
          scheduledExecutorService,
@@ -111,23 +120,52 @@ public final class JdbcNodeManager extends NodeManager {
          ioCriticalErrorListener);
    }
 
-   public static JdbcNodeManager usingConnectionUrl(String brokerId,
-                                                    long lockExpirationMillis,
-                                                    long lockRenewPeriodMillis,
-                                                    long lockAcquisitionTimeoutMillis,
-                                                    String jdbcUrl,
-                                                    String driverClass,
-                                                    SQLProvider provider,
-                                                    ScheduledExecutorService scheduledExecutorService,
-                                                    ExecutorFactory executorFactory,
-                                                    IOCriticalErrorListener ioCriticalErrorListener) {
+   private static JdbcNodeManager usingConnectionUrl(String brokerId,
+                                                     int networkTimeoutMillis,
+                                                     long lockExpirationMillis,
+                                                     long lockRenewPeriodMillis,
+                                                     long lockAcquisitionTimeoutMillis,
+                                                     String jdbcUrl,
+                                                     String driverClass,
+                                                     SQLProvider provider,
+                                                     ScheduledExecutorService scheduledExecutorService,
+                                                     ExecutorFactory executorFactory,
+                                                     IOCriticalErrorListener ioCriticalErrorListener) {
       return new JdbcNodeManager(
-         () -> JdbcSharedStateManager.usingConnectionUrl(brokerId, lockExpirationMillis, jdbcUrl, driverClass, provider),
+         () -> JdbcSharedStateManager.usingConnectionUrl(brokerId,
+                                                         networkTimeoutMillis,
+                                                         executorFactory == null ? null : executorFactory.getExecutor(),
+                                                         lockExpirationMillis,
+                                                         jdbcUrl,
+                                                         driverClass,
+                                                         provider),
          lockRenewPeriodMillis,
          lockAcquisitionTimeoutMillis,
          scheduledExecutorService,
          executorFactory,
          ioCriticalErrorListener);
+   }
+
+   private static void validateTimeoutConfiguration(DatabaseStorageConfiguration configuration) {
+      final long lockExpiration = configuration.getJdbcLockExpirationMillis();
+      if (lockExpiration <= 0) {
+         throw new IllegalArgumentException("jdbc-lock-expiration should be positive");
+      }
+      final long lockRenewPeriod = configuration.getJdbcLockRenewPeriodMillis();
+      if (lockRenewPeriod <= 0) {
+         throw new IllegalArgumentException("jdbc-lock-renew-period should be positive");
+      }
+      if (lockRenewPeriod > lockExpiration) {
+         throw new IllegalArgumentException("jdbc-lock-renew-period should be <= jdbc-lock-expiration");
+      }
+      final int networkTimeout = configuration.getJdbcNetworkTimeout();
+      if (networkTimeout >= 0) {
+         if (networkTimeout > lockExpiration) {
+            LOGGER.warn("jdbc-network-timeout isn't properly configured: the recommended value is <= jdbc-lock-expiration");
+         }
+      } else {
+         LOGGER.warn("jdbc-network-timeout isn't properly configured: the recommended value is <= jdbc-lock-expiration");
+      }
    }
 
    private JdbcNodeManager(Supplier<? extends SharedStateManager> sharedStateManagerFactory,
