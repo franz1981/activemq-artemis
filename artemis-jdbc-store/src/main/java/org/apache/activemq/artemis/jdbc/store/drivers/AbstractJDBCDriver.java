@@ -289,7 +289,7 @@ public abstract class AbstractJDBCDriver {
    }
 
    public final void setConnection(Connection connection) {
-      if (connection == null) {
+      if (this.connection == null) {
          this.connection = connection;
       }
    }
