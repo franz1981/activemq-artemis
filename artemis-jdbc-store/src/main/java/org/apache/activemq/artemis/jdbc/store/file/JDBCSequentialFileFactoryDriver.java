@@ -17,6 +17,8 @@
 package org.apache.activemq.artemis.jdbc.store.file;
 
 import javax.sql.DataSource;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.sql.Blob;
 import java.sql.Connection;
@@ -253,6 +255,9 @@ public class JDBCSequentialFileFactoryDriver extends AbstractJDBCDriver {
     * @throws SQLException
     */
    public int writeToFile(JDBCSequentialFile file, byte[] data) throws SQLException {
+      if (data == null || data.length == 0) {
+         return 0;
+      }
       synchronized (connection) {
          connection.setAutoCommit(false);
          appendToLargeObject.setLong(1, file.getId());
@@ -264,7 +269,18 @@ public class JDBCSequentialFileFactoryDriver extends AbstractJDBCDriver {
                if (blob == null) {
                   blob = connection.createBlob();
                }
-               bytesWritten = blob.setBytes(blob.length() + 1, data);
+               final long blobLength = blob.length();
+               final long maxSize = getMaxSize();
+               assert blobLength <= getMaxSize();
+               if (blobLength == maxSize) {
+                  throw new SQLException(new IllegalStateException("blob has already reached the max allowed size = " + maxSize));
+               }
+               try (OutputStream outputStream = blob.setBinaryStream(blobLength + 1)) {
+                  outputStream.write(data);
+               } catch (IOException ex) {
+                  throw new SQLException(ex);
+               }
+               bytesWritten += data.length;
                rs.updateBlob(1, blob);
                rs.updateRow();
             }
