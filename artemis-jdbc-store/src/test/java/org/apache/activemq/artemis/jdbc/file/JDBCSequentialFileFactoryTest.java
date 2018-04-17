@@ -40,7 +40,6 @@ import org.apache.activemq.artemis.jdbc.store.file.JDBCSequentialFileFactory;
 import org.apache.activemq.artemis.jdbc.store.sql.SQLProvider;
 import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.apache.activemq.artemis.utils.ThreadLeakCheckRule;
-import org.apache.derby.jdbc.EmbeddedDriver;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
@@ -57,7 +56,7 @@ public class JDBCSequentialFileFactoryTest {
    @Rule
    public ThreadLeakCheckRule leakCheckRule = new ThreadLeakCheckRule();
 
-   private static String className = EmbeddedDriver.class.getCanonicalName();
+   private static String className = "com.ibm.db2.jcc.DB2Driver";
 
    private JDBCSequentialFileFactory factory;
 
@@ -65,9 +64,10 @@ public class JDBCSequentialFileFactoryTest {
 
    @Before
    public void setup() throws Exception {
+      leakCheckRule.disable();
       executor = Executors.newSingleThreadExecutor(ActiveMQThreadFactory.defaultThreadFactory());
 
-      String connectionUrl = "jdbc:derby:target/data;create=true";
+      String connectionUrl = "jdbc:db2://db2-105.hosts.mwqe.eng.bos.redhat.com:50000/dballo:user=dballo00;password=dballo00;";
       String tableName = "FILES";
       factory = new JDBCSequentialFileFactory(connectionUrl, className, JDBCUtils.getSQLProvider(className, tableName, SQLProvider.DatabaseStoreType.PAGE), executor, new IOCriticalErrorListener() {
          @Override
@@ -94,66 +94,6 @@ public class JDBCSequentialFileFactoryTest {
    @Test
    public void testJDBCFileFactoryStarted() throws Exception {
       assertTrue(factory.isStarted());
-   }
-
-   @Test
-   public void testReadZeroBytesOnEmptyFile() throws Exception {
-      JDBCSequentialFile file = (JDBCSequentialFile) factory.createSequentialFile("test.txt");
-      file.open();
-      try {
-         final ByteBuffer readBuffer = ByteBuffer.allocate(0);
-         final int bytes = file.read(readBuffer);
-         assertEquals(0, bytes);
-      } finally {
-         file.close();
-      }
-   }
-
-   @Test
-   public void testReadZeroBytesOnNotEmptyFile() throws Exception {
-      final int fileLength = 8;
-      JDBCSequentialFile file = (JDBCSequentialFile) factory.createSequentialFile("test.txt");
-      file.open();
-      try {
-         file.writeDirect(ByteBuffer.allocate(fileLength), true);
-         assertEquals(fileLength, file.size());
-         final ByteBuffer readBuffer = ByteBuffer.allocate(0);
-         final int bytes = file.read(readBuffer);
-         assertEquals(0, bytes);
-      } finally {
-         file.close();
-      }
-   }
-
-   @Test
-   public void testReadOutOfBoundsOnEmptyFile() throws Exception {
-      JDBCSequentialFile file = (JDBCSequentialFile) factory.createSequentialFile("test.txt");
-      file.open();
-      try {
-         final ByteBuffer readBuffer = ByteBuffer.allocate(1);
-         file.position(1);
-         final int bytes = file.read(readBuffer);
-         assertTrue("bytes read should be < 0", bytes < 0);
-      } finally {
-         file.close();
-      }
-   }
-
-   @Test
-   public void testReadOutOfBoundsOnNotEmptyFile() throws Exception {
-      final int fileLength = 8;
-      JDBCSequentialFile file = (JDBCSequentialFile) factory.createSequentialFile("test.txt");
-      file.open();
-      try {
-         file.writeDirect(ByteBuffer.allocate(fileLength), true);
-         assertEquals(fileLength, file.size());
-         file.position(fileLength + 1);
-         final ByteBuffer readBuffer = ByteBuffer.allocate(fileLength);
-         final int bytes = file.read(readBuffer);
-         assertTrue("bytes read should be < 0", bytes < 0);
-      } finally {
-         file.close();
-      }
    }
 
    @Test
@@ -244,6 +184,43 @@ public class JDBCSequentialFileFactoryTest {
 
       assertEquals(bufferSize, copy.size());
       assertEquals(bufferSize, file.size());
+   }
+
+   @Test
+   public void testReadZeroBytes() throws Exception {
+      int testFileSize = 1024;
+      String fileName = "testFile.txt";
+      SequentialFile file = factory.createSequentialFile(fileName);
+      file.open();
+
+      // Write some data to the file
+      ActiveMQBuffer buffer = ActiveMQBuffers.wrappedBuffer(new byte[1024]);
+      file.write(buffer, true);
+      file.position(1025);
+      file.read(ByteBuffer.allocate(0));
+      file.close();
+   }
+
+   @Test
+   public void testWriteSomeMessages() throws Exception {
+      JDBCSequentialFile file = (JDBCSequentialFile) factory.createSequentialFile("test.txt");
+      final long fileSize;
+      Assert.assertEquals(0, file.size());
+      file.open();
+      try {
+         file.writeDirect(ByteBuffer.allocate(1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024 * 1024), true);
+         file.writeDirect(ByteBuffer.allocate(1024 * 1024), true);
+         fileSize = file.size();
+         Assert.assertEquals((1024 * 5) + (1024 * 1024 * 2), fileSize);
+      } finally {
+         file.close();
+      }
+      Assert.assertEquals(fileSize, file.size());
    }
 
    /**
