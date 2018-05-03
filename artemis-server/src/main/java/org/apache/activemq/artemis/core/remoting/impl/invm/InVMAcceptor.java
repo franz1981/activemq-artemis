@@ -39,6 +39,7 @@ import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.spi.core.remoting.ServerConnectionLifeCycleListener;
 import org.apache.activemq.artemis.utils.ConfigurationHelper;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
+import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
@@ -219,7 +220,7 @@ public final class InVMAcceptor extends AbstractAcceptor {
    public void connect(final String connectionID,
                        final BufferHandler remoteHandler,
                        final InVMConnector connector,
-                       final Executor clientExecutor) {
+                       final ArtemisExecutor clientExecutor) {
       if (!started) {
          throw new IllegalStateException("Acceptor is not started");
       }

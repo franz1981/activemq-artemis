@@ -36,6 +36,7 @@ import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.artemis.utils.UUIDGenerator;
 import org.apache.activemq.artemis.utils.actors.Actor;
+import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.jboss.logging.Logger;
 
 public class InVMConnection implements Connection {
@@ -70,7 +71,7 @@ public class InVMConnection implements Connection {
    public InVMConnection(final int serverID,
                          final BufferHandler handler,
                          final BaseConnectionLifeCycleListener listener,
-                         final Executor executor) {
+                         final ArtemisExecutor executor) {
       this(serverID, UUIDGenerator.getInstance().generateSimpleStringUUID().toString(), handler, listener, executor);
    }
 
@@ -78,7 +79,7 @@ public class InVMConnection implements Connection {
                          final String id,
                          final BufferHandler handler,
                          final BaseConnectionLifeCycleListener listener,
-                         final Executor executor) {
+                         final ArtemisExecutor executor) {
       this(serverID, id, handler, listener, executor, null);
    }
 
@@ -86,7 +87,7 @@ public class InVMConnection implements Connection {
                          final String id,
                          final BufferHandler handler,
                          final BaseConnectionLifeCycleListener listener,
-                         final Executor executor,
+                         final ArtemisExecutor executor,
                          final ActiveMQPrincipal defaultActiveMQPrincipal) {
       this.serverID = serverID;
 
