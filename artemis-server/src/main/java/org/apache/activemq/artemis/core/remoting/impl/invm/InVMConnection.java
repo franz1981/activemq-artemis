@@ -23,7 +23,6 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
-import io.netty.channel.ChannelFutureListener;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
@@ -36,6 +35,7 @@ import org.apache.activemq.artemis.spi.core.remoting.BufferHandler;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.artemis.utils.UUIDGenerator;
+import org.apache.activemq.artemis.utils.actors.Actor;
 import org.jboss.logging.Logger;
 
 public class InVMConnection implements Connection {
@@ -48,7 +48,7 @@ public class InVMConnection implements Connection {
 
    private final String id;
 
-   private boolean closed;
+   private volatile boolean closed;
 
    // Used on tests
    private static boolean flushEnabled = true;
@@ -64,6 +64,8 @@ public class InVMConnection implements Connection {
    private RemotingConnection protocolConnection;
 
    private boolean bufferPoolingEnabled = TransportConstants.DEFAULT_BUFFER_POOLING;
+
+   private final Actor<ActiveMQBuffer> bufferActor;
 
    public InVMConnection(final int serverID,
                          final BufferHandler handler,
@@ -97,6 +99,8 @@ public class InVMConnection implements Connection {
       this.executor = executor;
 
       this.defaultActiveMQPrincipal = defaultActiveMQPrincipal;
+
+      this.bufferActor = new Actor<>(executor, this::onBuffer);
    }
 
    public void setEnableBufferPooling(boolean enableBufferPooling) {
@@ -169,69 +173,56 @@ public class InVMConnection implements Connection {
 
    @Override
    public void write(final ActiveMQBuffer buffer) {
-      write(buffer, false, false, null);
+      write(buffer, false, false);
    }
 
    @Override
    public void write(final ActiveMQBuffer buffer, final boolean flush, final boolean batch) {
-      write(buffer, flush, batch, null);
-   }
-
-   @Override
-   public void write(final ActiveMQBuffer buffer,
-                     final boolean flush,
-                     final boolean batch,
-                     final ChannelFutureListener futureListener) {
-
       try {
-         executor.execute(new Runnable() {
-            @Override
-            public void run() {
-               try {
-                  if (!closed) {
-                     buffer.readInt(); // read and discard
-                     if (logger.isTraceEnabled()) {
-                        logger.trace(InVMConnection.this + "::Sending inVM packet");
-                     }
-                     handler.bufferReceived(id, buffer);
-                     if (futureListener != null) {
-                        futureListener.operationComplete(null);
-                     }
-                  }
-               } catch (Exception e) {
-                  final String msg = "Failed to write to handler on connector " + this;
-                  ActiveMQServerLogger.LOGGER.errorWritingToInvmConnector(e, this);
-                  throw new IllegalStateException(msg, e);
-               } finally {
-                  buffer.release();
-                  if (logger.isTraceEnabled()) {
-                     logger.trace(InVMConnection.this + "::packet sent done");
-                  }
-               }
-            }
-         });
-
+         bufferActor.act(buffer);
          if (flush && flushEnabled) {
-            final CountDownLatch latch = new CountDownLatch(1);
-            executor.execute(new Runnable() {
-               @Override
-               public void run() {
-                  latch.countDown();
-               }
-            });
-
-            try {
-               if (!latch.await(10, TimeUnit.SECONDS)) {
-                  ActiveMQServerLogger.LOGGER.timedOutFlushingInvmChannel();
-               }
-            } catch (InterruptedException e) {
-               throw new ActiveMQInterruptedException(e);
-            }
+            awaitFlush();
          }
       } catch (RejectedExecutionException e) {
          // Ignore - this can happen if server/client is shutdown and another request comes in
       }
+   }
 
+   private void onBuffer(ActiveMQBuffer buffer) {
+      try {
+         if (!closed) {
+            buffer.readInt(); // read and discard
+            if (logger.isTraceEnabled()) {
+               logger.tracef("%s::Sending inVM packet", this);
+            }
+            handler.bufferReceived(id, buffer);
+         }
+      } catch (Exception e) {
+         onBufferException(e);
+      } finally {
+         buffer.release();
+         if (logger.isTraceEnabled()) {
+            logger.tracef("%s::packet sent done", this);
+         }
+      }
+   }
+
+   private void onBufferException(Exception e) {
+      final String msg = "Failed to write to handler on connector " + this;
+      ActiveMQServerLogger.LOGGER.errorWritingToInvmConnector(e, id);
+      throw new IllegalStateException(msg, e);
+   }
+
+   private void awaitFlush() {
+      final CountDownLatch latch = new CountDownLatch(1);
+      executor.execute(latch::countDown);
+      try {
+         if (!latch.await(10, TimeUnit.SECONDS)) {
+            ActiveMQServerLogger.LOGGER.timedOutFlushingInvmChannel();
+         }
+      } catch (InterruptedException e) {
+         throw new ActiveMQInterruptedException(e);
+      }
    }
 
    @Override

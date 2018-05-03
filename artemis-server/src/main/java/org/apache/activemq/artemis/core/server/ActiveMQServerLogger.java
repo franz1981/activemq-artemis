@@ -1683,7 +1683,7 @@ public interface ActiveMQServerLogger extends BasicLogger {
 
    @LogMessage(level = Logger.Level.ERROR)
    @Message(id = 224027, value = "Failed to write to handler on invm connector {0}", format = Message.Format.MESSAGE_FORMAT)
-   void errorWritingToInvmConnector(@Cause Exception e, Runnable runnable);
+   void errorWritingToInvmConnector(@Cause Exception e, String connectionId);
 
    @LogMessage(level = Logger.Level.ERROR)
    @Message(id = 224028, value = "Failed to stop acceptor {0}", format = Message.Format.MESSAGE_FORMAT)

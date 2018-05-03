@@ -18,7 +18,6 @@ package org.apache.activemq.artemis.spi.core.remoting;
 
 import java.util.concurrent.TimeUnit;
 
-import io.netty.channel.ChannelFutureListener;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.core.security.ActiveMQPrincipal;
@@ -82,15 +81,6 @@ public interface Connection {
     * @param batched whether the packet is allowed to batched for better performance
     */
    void write(ActiveMQBuffer buffer, boolean flush, boolean batched);
-
-   /**
-    * writes the buffer to the connection and if flush is true returns only when the buffer has been physically written to the connection.
-    *
-    * @param buffer  the buffer to write
-    * @param flush   whether to flush the buffers onto the wire
-    * @param batched whether the packet is allowed to batched for better performance
-    */
-   void write(ActiveMQBuffer buffer, boolean flush, boolean batched, ChannelFutureListener futureListener);
 
    /**
     * writes the buffer to the connection with no flushing or batching
