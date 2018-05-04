@@ -56,7 +56,7 @@ public class InVMConnection implements Connection {
 
    private final int serverID;
 
-   private final Executor executor;
+   private final ArtemisExecutor executor;
 
    private volatile boolean closing;
 
