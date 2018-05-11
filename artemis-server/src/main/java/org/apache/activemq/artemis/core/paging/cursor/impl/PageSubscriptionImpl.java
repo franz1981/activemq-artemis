@@ -777,6 +777,7 @@ final class PageSubscriptionImpl implements PageSubscription {
          if (pageInfo == null) {
             PageCache cache = cursorProvider.getPageCache(pageNr);
             if (cache == null) {
+               logger.tracef("lookup of page info for page Nr %d isn't getting any related page cache", pageNr);
                return null;
             }
             pageInfo = new PageCursorInfo(pageNr, cache.getNumberOfMessages(), cache);
