@@ -844,17 +844,18 @@ final class PageSubscriptionImpl implements PageSubscription {
          tx.setContainsPersistent();
       }
 
-      PageCursorInfo info = getPageInfo(position);
-      PageCache cache = info.getCache();
-      long size = 0;
+      final PageCursorInfo info = getPageInfo(position);
+      final PageCache cache = info != null ? info.getCache() : null;
       if (cache != null) {
-         size = getPersistentSize(cache.getMessage(position.getMessageNr()));
+         final long size = getPersistentSize(cache.getMessage(position.getMessageNr()));
          position.setPersistentSize(size);
       }
 
       logger.tracef("InstallTXCallback looking up pagePosition %s, result=%s", position, info);
 
-      info.remove(position);
+      if (info != null) {
+         info.remove(position);
+      }
 
       PageCursorTX cursorTX = (PageCursorTX) tx.getProperty(TransactionPropertyIndexes.PAGE_CURSOR_POSITIONS);
 
