@@ -83,7 +83,7 @@ public final class RotatingFileAppender implements AutoCloseable {
       private final LibaioContext<FileOperation> context;
       private int journalFileId;
       private final File journalDir;
-      private final int fileSize;
+      private final long fileSize;
       private final boolean fillBeforeWrite;
       private LibaioFile<FileOperation> file = null;
       private int fileWriteIndex = 0;
@@ -114,7 +114,7 @@ public final class RotatingFileAppender implements AutoCloseable {
             file = context.openFile(new File(journalDir, Integer.toString(this.journalFileId)), true);
             fileWriteIndex = 0;
             if (fillBeforeWrite) {
-               file.fill(fileSize);
+               file.fill(alignment, fileSize);
             }
             this.journalFileId++;
             currentFile = file;

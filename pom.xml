@@ -83,6 +83,7 @@
       <apache.derby.version>10.11.1.1</apache.derby.version>
       <commons.beanutils.version>1.9.3</commons.beanutils.version>
       <org.hdrhistogram.version>2.1.10</org.hdrhistogram.version>
+      <lmax.disruptor.version>3.4.2</lmax.disruptor.version>
       <commons.collections.version>3.2.2</commons.collections.version>
       <fuse.mqtt.client.version>1.14</fuse.mqtt.client.version>
       <guava.version>19.0</guava.version>
@@ -691,6 +692,13 @@
             <artifactId>HdrHistogram</artifactId>
             <version>${org.hdrhistogram.version}</version>
             <!-- License: Public Domain -->
+         </dependency>
+         <!-- needed by journal -->
+         <dependency>
+            <groupId>com.lmax</groupId>
+            <artifactId>disruptor</artifactId>
+            <version>${lmax.disruptor.version}</version>
+            <!-- License: Apache 2.0 -->
          </dependency>
 
          <!-- needed by artemis-selector -->

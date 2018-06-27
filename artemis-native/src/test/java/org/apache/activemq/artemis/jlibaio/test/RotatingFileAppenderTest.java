@@ -65,10 +65,10 @@ public class RotatingFileAppenderTest {
       final ThreadFactory factory = Thread::new;
       final boolean fillBeforeWrite = true;
       final int tests = 5;
-      final int messages = 1000;
+      final int messages = 15000;
       final boolean fsync = true;
-      final int fileSize = 100 * 1024 * 1024;
-      final int messageSize = 4096;
+      final int fileSize = 10 * 1024 * 1024;
+      final int messageSize = 100;
       final int maxIO = 512;
       try (RotatingFileAppender rotatingFileAppender = new RotatingFileAppender(journalDir, fileSize, maxIO, factory, producers > 1 ? ProducerType.MULTI : ProducerType.SINGLE, new LiteBlockingWaitStrategy(), fillBeforeWrite, fsync)) {
          rotatingFileAppender.start();

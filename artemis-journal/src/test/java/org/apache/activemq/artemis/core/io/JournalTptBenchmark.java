@@ -40,23 +40,34 @@ import org.apache.activemq.artemis.jlibaio.LibaioContext;
 import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 
 /**
- * To benchmark Type.Aio you need to define -Djava.library.path=${project-root}/native/src/.libs when calling the JVM
+ * To benchmark Type.Aio you need to define -Djava.library.path=/home/forked_franz/IdeaProjects/activemq-artemis/artemis-native/bin when calling the JVM
  */
 public class JournalTptBenchmark {
 
+   public static void spinWaitUntil(long deadline) {
+      long waitTime;
+      while ((waitTime = (deadline - System.nanoTime())) > 0) {
+         LockSupport.parkNanos(waitTime);
+      }
+   }
+
+   private static long nanoPeriod;
+
    public static void main(String[] args) throws Exception {
+      final int target = 0;
+      nanoPeriod = target > 0 ? (TimeUnit.SECONDS.toNanos(1) / target) : 0;
       final boolean useDefaultIoExecutor = true;
       final int fileSize = 10 * 1024 * 1024;
-      final boolean dataSync = false;
-      final Type type = Type.Mapped;
-      final int tests = 10;
-      final int warmup = 20_000;
-      final int measurements = 100_000;
+      final boolean dataSync = true;
+      final Type type = Type.Aio;
+      final int tests = 4;
+      final int warmup = 1000;
+      final int measurements = 1000;
       final int msgSize = 100;
       final byte[] msgContent = new byte[msgSize];
       Arrays.fill(msgContent, (byte) 1);
       final int totalMessages = (measurements * tests + warmup);
-      final File tmpDirectory = new File("./");
+      final File tmpDirectory = new File("./bench_files");
       //using the default configuration when the broker starts!
       final SequentialFileFactory factory;
       switch (type) {
@@ -184,7 +195,12 @@ public class JournalTptBenchmark {
       TimeUnit.SECONDS.sleep(2);
 
       final long start = System.nanoTime();
+      long nextTime = start + nanoPeriod;
       for (int i = 0; i < measurements; i++) {
+         if (nanoPeriod != 0) {
+            spinWaitUntil(nextTime);
+            nextTime += nanoPeriod;
+         }
          write(id, journal, encodingSupport);
          id++;
       }
@@ -194,7 +210,7 @@ public class JournalTptBenchmark {
 
    private static void write(long id, Journal journal, EncodingSupport encodingSupport) throws Exception {
       journal.appendAddRecord(id, (byte) 1, encodingSupport, false);
-      journal.appendUpdateRecord(id, (byte) 1, encodingSupport, true);
+      journal.appendDeleteRecord(id, true);
    }
 
    private enum Type {

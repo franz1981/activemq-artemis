@@ -28,8 +28,8 @@ import org.apache.activemq.artemis.core.io.DummyCallback;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
-import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.io.buffer.TimedBufferObserver;
+import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
@@ -39,7 +39,7 @@ final class TimedSequentialFile implements SequentialFile {
    private final SequentialFileFactory factory;
    private final SequentialFile sequentialFile;
    private final LocalBufferObserver observer;
-   private TimedBuffer timedBuffer;
+   private WriteBuffer timedBuffer;
 
    TimedSequentialFile(SequentialFileFactory factory, SequentialFile sequentialFile) {
       this.sequentialFile = sequentialFile;
@@ -219,7 +219,7 @@ final class TimedSequentialFile implements SequentialFile {
    }
 
    @Override
-   public void setTimedBuffer(TimedBuffer buffer) {
+   public void setTimedBuffer(WriteBuffer buffer) {
       if (this.timedBuffer != null) {
          this.timedBuffer.setObserver(null);
       }
