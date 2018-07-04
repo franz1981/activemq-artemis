@@ -20,6 +20,7 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +42,58 @@ import java.util.concurrent.atomic.AtomicLong;
  * <a href="https://ext4.wiki.kernel.org/index.php/Clarifying_Direct_IO's_Semantics">Interesting reading for this.</a>
  */
 public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
+
+   //https://github.com/redhat-cip/fio/blob/master/engines/libaio.c#L94
+   public static final class LinuxAioRingBufferLayout {
+
+      private static final int ID_OFFSET = 0;
+      private static final int ID_SIZE = Integer.BYTES;
+      private static final int NR_OFFSET = ID_OFFSET + ID_SIZE;
+      private static final int NR_SIZE = Integer.BYTES;
+      private static final int HEAD_OFFSET = NR_OFFSET + NR_SIZE;
+      private static final int HEAD_SIZE = Integer.BYTES;
+      private static final int TAIL_OFFSET = HEAD_OFFSET + HEAD_SIZE;
+      private static final int TAIL_SIZE = Integer.BYTES;
+      private static final int MAGIC_OFFSET = TAIL_OFFSET + TAIL_SIZE;
+      private static final int MAGIC_SIZE = Integer.BYTES;
+      private static final int COMPAT_FEATURES_OFFSET = MAGIC_OFFSET + MAGIC_SIZE;
+      private static final int COMPAT_FEATURES_SIZE = Integer.BYTES;
+      private static final int INCOMPAT_FEATURES_OFFSET = COMPAT_FEATURES_OFFSET + COMPAT_FEATURES_SIZE;
+      private static final int INCOMPAT_FEATURES_SIZE = Integer.BYTES;
+      private static final int HEADER_LENGTH_OFFSET = INCOMPAT_FEATURES_OFFSET + INCOMPAT_FEATURES_SIZE;
+      private static final int HEADER_LENGTH_SIZE = Integer.BYTES;
+
+      public static void debugPrintContext(ByteBuffer ioContext) {
+         if (ioContext.order() != ByteOrder.nativeOrder()) {
+            ioContext.order(ByteOrder.nativeOrder());
+         }
+         final long id = Integer.toUnsignedLong(ioContext.getInt(ID_OFFSET));
+         final long nr = Integer.toUnsignedLong(ioContext.getInt(NR_OFFSET));
+         final long head = Integer.toUnsignedLong(ioContext.getInt(HEAD_OFFSET));
+         final long tail = Integer.toUnsignedLong(ioContext.getInt(TAIL_OFFSET));
+         final long magic = Integer.toUnsignedLong(ioContext.getInt(MAGIC_OFFSET));
+         final long compFeatures = Integer.toUnsignedLong(ioContext.getInt(COMPAT_FEATURES_OFFSET));
+         final long incompFeatures = Integer.toUnsignedLong(ioContext.getInt(INCOMPAT_FEATURES_OFFSET));
+         final long headerLength = Integer.toUnsignedLong(ioContext.getInt(HEADER_LENGTH_OFFSET));
+         System.out.println("***** JAVA ***** id = " + id + " @ " + ID_OFFSET);
+         System.out.println("***** JAVA ***** nr = " + nr + " @ " + NR_OFFSET);
+         System.out.println("***** JAVA ***** head = " + head + " @ " + HEAD_OFFSET);
+         System.out.println("***** JAVA ***** tail = " + tail + " @ " + TAIL_OFFSET);
+         System.out.println("***** JAVA ***** magic = " + magic + " @ " + MAGIC_OFFSET);
+         System.out.println("***** JAVA ***** comp_features = " + compFeatures + " @ " + COMPAT_FEATURES_OFFSET);
+         System.out.println("***** JAVA ***** incomp_features = " + incompFeatures + " @ " + INCOMPAT_FEATURES_OFFSET);
+         System.out.println("***** JAVA ***** header_length = " + headerLength + " @ " + HEADER_LENGTH_OFFSET);
+      }
+
+      public static boolean isSupported(ByteBuffer ioContext) {
+         if (ioContext.order() != ByteOrder.nativeOrder()) {
+            ioContext.order(ByteOrder.nativeOrder());
+         }
+         final int magic = ioContext.getInt(MAGIC_OFFSET);
+         final int expectedMagic = 0xa10a10a1;
+         return magic == expectedMagic && ioContext.getInt(INCOMPAT_FEATURES_OFFSET) == 0;
+      }
+   }
 
    private static final AtomicLong totalMaxIO = new AtomicLong(0);
 
@@ -335,6 +388,9 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * @see LibaioFile#read(long, int, java.nio.ByteBuffer, SubmitInfo)
     */
    public int poll(Callback[] callbacks, int min, int max) {
+      if (LinuxAioRingBufferLayout.isSupported(ioContext)) {
+         System.out.println("SUPPORTED!!!!");
+      }
       int released = poll(ioContext, callbacks, min, max);
       if (ioSpace != null) {
          if (released > 0) {
@@ -353,8 +409,19 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     */
    public void poll() {
       if (!closed.get()) {
+         if (LinuxAioRingBufferLayout.isSupported(ioContext)) {
+            System.out.println("SUPPORTED!!!!");
+         }
          blockedPoll(ioContext, useFdatasync);
       }
+   }
+
+   public void nativeDebugPrintContext() {
+      debugPrintContext(ioContext);
+   }
+
+   public void jvmDebugPrintContext() {
+      LinuxAioRingBufferLayout.debugPrintContext(ioContext);
    }
 
    /**
@@ -371,6 +438,8 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * This is the queue for libaio, initialized with queueSize.
     */
    private native ByteBuffer newContext(int queueSize);
+
+   private static native void debugPrintContext(ByteBuffer buffer);
 
    /**
     * Internal method to be used when closing the controller.

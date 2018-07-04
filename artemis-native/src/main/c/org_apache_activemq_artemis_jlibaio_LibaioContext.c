@@ -23,6 +23,7 @@
 //#define DEBUG
 
 #include <jni.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <errno.h>
 #include <libaio.h>
@@ -56,6 +57,54 @@ struct io_control {
     int used;
 
 };
+
+#define AIO_RING_MAGIC	0xa10a10a1
+#define read_barrier()	__asm__ __volatile__("lfence":::"memory")
+#define store_barrier()	__asm__ __volatile__("sfence":::"memory")
+#define mem_barrier() __asm__ __volatile__ ("":::"memory")
+
+struct aio_ring {
+	unsigned	id;	/* kernel internal index number */
+	unsigned	nr;	/* number of io_events */
+	unsigned	head;
+	unsigned	tail;
+
+	unsigned	magic;
+	unsigned	compat_features;
+	unsigned	incompat_features;
+	unsigned	header_length;	/* size of aio_ring */
+
+
+	struct io_event		io_events[0];
+}; /* 128 bytes + ring size */
+
+static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
+			     struct io_event *events)
+{
+	long i = 0;
+	unsigned head;
+	struct aio_ring *ring = (struct aio_ring*) aio_ctx;
+	// The kernel will write to the ring from an interrupt and then release with a write
+    // to ring->tail, so we must load acquire here.
+    unsigned tail = ring->tail;
+    read_barrier();
+    unsigned ring_nr = ring->nr;
+	while (i < max) {
+		head = ring->head;
+		mem_barrier();
+		if (head == tail) {
+			/* There are no more completions */
+			break;
+		} else {
+			events[i] = ring->io_events[head];
+			ring->head = (head + 1) % ring_nr;
+			store_barrier();
+			//it allow the kernel to build its own view of the ring buffer size
+			i++;
+		}
+	}
+	return i;
+}
 
 // We need a fast and reliable way to stop the blocked poller
 // for that we need a dumb file,
@@ -358,6 +407,10 @@ JNIEXPORT jboolean JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContex
     return flock(handle, LOCK_EX | LOCK_NB) == 0;
 }
 
+#define AIO_RING_MAGIC			0xa10a10a1
+#define AIO_RING_COMPAT_FEATURES	1
+#define AIO_RING_INCOMPAT_FEATURES	0
+
 /**
  * Everything that is allocated here will be freed at deleteContext when the class is unloaded.
  */
@@ -419,7 +472,6 @@ JNIEXPORT jobject JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext
     }
 
     struct io_event * events = (struct io_event *)malloc(sizeof(struct io_event) * (size_t)queueSize);
-
     theControl->ioContext = libaioContext;
     theControl->events = events;
     theControl->iocb = iocb;
@@ -430,6 +482,22 @@ JNIEXPORT jobject JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext
     theControl->thisObject = (*env)->NewGlobalRef(env, thisObject);
 
     return (*env)->NewDirectByteBuffer(env, theControl, sizeof(struct io_control));
+}
+
+JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_debugPrintContext(JNIEnv* env, jclass clazz, jobject contextPointer) {
+    struct io_control * theControl = getIOControl(env, contextPointer);
+    if (theControl == NULL) {
+      return;
+    }
+    struct aio_ring * ctx_ring = (struct aio_ring *)theControl;
+    fprintf(stdout, "ring buffer.id = %u @ %ld\n" , ctx_ring->id, (long) offsetof(struct aio_ring, id));
+    fprintf(stdout, "ring buffer.nr = %u @ %ld\n" , ctx_ring->nr, (long) offsetof(struct aio_ring, nr));
+    fprintf(stdout, "ring buffer.head = %u @ %ld\n" , ctx_ring->head, (long) offsetof(struct aio_ring, head));
+    fprintf(stdout, "ring buffer.tail = %u @ %ld\n" , ctx_ring->tail, (long) offsetof(struct aio_ring, tail));
+    fprintf(stdout, "ring buffer.magic = %u @ %ld\n" , ctx_ring->magic, (long) offsetof(struct aio_ring, magic));
+    fprintf(stdout, "ring buffer.compat_features = %u @ %ld\n" , ctx_ring->compat_features, (long) offsetof(struct aio_ring, compat_features));
+    fprintf(stdout, "ring buffer.incomp_features = %u @ %ld\n" , ctx_ring->incompat_features, (long) offsetof(struct aio_ring, incompat_features));
+    fprintf(stdout, "ring buffer_header_length = %u @ %ld\n" , ctx_ring->header_length, (long) offsetof(struct aio_ring, header_length));
 }
 
 JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_deleteContext(JNIEnv* env, jclass clazz, jobject contextPointer) {
@@ -458,7 +526,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_de
     pthread_mutex_unlock(&(theControl->pollLock));
 
     // To return any pending IOCBs
-    int result = io_getevents(theControl->ioContext, 0, 1, theControl->events, 0);
+    int result = user_io_getevents(theControl->ioContext, 1, theControl->events);
     for (i = 0; i < result; i++) {
         struct io_event * event = &(theControl->events[i]);
         struct iocb * iocbp = event->obj;
@@ -584,7 +652,10 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_bl
 
     while (running) {
 
-        int result = io_getevents(theControl->ioContext, 1, max, theControl->events, 0);
+        int result = user_io_getevents(theControl->ioContext, max, theControl->events);
+        if (result == 0) {
+            result = io_getevents(theControl->ioContext, 1, max, theControl->events, 0);
+        }
 
         if (result == -EINTR)
         {
@@ -674,8 +745,12 @@ JNIEXPORT jint JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_po
       return 0;
     }
 
-
-    int result = io_getevents(theControl->ioContext, min, max, theControl->events, 0);
+    int result;
+    if (min == 0 && max > 0) {
+        result = user_io_getevents(theControl->ioContext, max, theControl->events);
+    } else {
+        result = io_getevents(theControl->ioContext, min, max, theControl->events, 0);
+    }
     int retVal = result;
 
     for (i = 0; i < result; i++) {

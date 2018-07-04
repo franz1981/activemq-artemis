@@ -112,6 +112,17 @@ public class LibaioTest {
    }
 
    @Test
+   public void debugContext() throws Exception {
+      LibaioFile fileDescriptor = control.openFile(temporaryFolder.newFile("test.bin"), true);
+      try {
+         control.jvmDebugPrintContext();
+         control.nativeDebugPrintContext();
+      } finally {
+         fileDescriptor.close();
+      }
+   }
+
+   @Test
    public void testInitAndFallocate10M() throws Exception {
       testInit(10 * 1024 * 1024);
    }
