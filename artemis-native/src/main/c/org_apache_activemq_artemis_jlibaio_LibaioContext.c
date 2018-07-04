@@ -63,6 +63,7 @@ struct io_control {
 //memory order relaxed/acquire/release x86_64 barrier implementations
 #define read_barrier()	__asm__ __volatile__("lfence":::"memory")
 #define store_barrier()	__asm__ __volatile__("sfence":::"memory")
+#define full_barrier()	__asm__ __volatile__("mfence":::"memory")
 #define mem_barrier() __asm__ __volatile__ ("":::"memory")
 
 struct aio_ring {
@@ -90,7 +91,7 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
 	struct aio_ring *ring = (struct aio_ring*) aio_ctx;
     unsigned ring_nr = ring->nr;
 	while (i < max) {
-		head = ring->head;
+	    head = ring->head;
 		mem_barrier();
 		//The kernel will write to the ring from an interrupt, releasing the events
         //with a write to ring->tail, so we must load acquire here.
@@ -101,10 +102,13 @@ static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
 			break;
 		} else {
 			events[i] = ring->io_events[head];
-			ring->head = (head + 1) % ring_nr;
-			store_barrier();
 			//it allow the kernel to build its own view of the ring buffer size
-			//and push new events concurrently
+            //and push new events concurrently
+			store_barrier();
+			ring->head = (head + 1) % ring_nr;
+			//if a read->tail read is moved before storing ring->head
+			//it will find the tail unchanged: it means that the ring buffer could
+			//be considered unchanged (empty too)
 			i++;
 		}
 	}
