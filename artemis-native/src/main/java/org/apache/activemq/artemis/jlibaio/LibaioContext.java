@@ -437,10 +437,14 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     */
    native int poll(ByteBuffer libaioContext, Callback[] callbacks, int min, int max);
 
+   private void blockedPoll(ByteBuffer libaioContext, boolean useFdatasync) {
+      blockedPoll(libaioContext, useFdatasync, false);
+   }
+
    /**
     * This method will block as long as the context is open.
     */
-   native void blockedPoll(ByteBuffer libaioContext, boolean useFdatasync);
+   native void blockedPoll(ByteBuffer libaioContext, boolean useFdatasync, boolean spinWait);
 
    static native int getNativeVersion();
 

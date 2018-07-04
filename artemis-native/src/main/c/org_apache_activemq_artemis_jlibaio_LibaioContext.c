@@ -57,6 +57,60 @@ struct io_control {
 
 };
 
+//These should be used to check if the user_io_getevents is supported, but almost every modern kernel support it
+#define AIO_RING_MAGIC	0xa10a10a1
+#define AIO_RING_INCOMPAT_FEATURES	0
+//memory order relaxed/acquire/release x86_64 barrier implementations
+#define read_barrier()	__asm__ __volatile__("lfence":::"memory")
+#define store_barrier()	__asm__ __volatile__("sfence":::"memory")
+#define mem_barrier() __asm__ __volatile__ ("":::"memory")
+
+struct aio_ring {
+	unsigned	id;	/* kernel internal index number */
+	unsigned	nr;	/* number of io_events */
+	unsigned	head;
+	unsigned	tail;
+
+	unsigned	magic;
+	unsigned	compat_features;
+	unsigned	incompat_features;
+	unsigned	header_length;	/* size of aio_ring */
+
+
+	struct io_event		io_events[0];
+}; /* 128 bytes + ring size */
+
+//it should check ring->magic == AIO_RING_MAGIC && ring_incompat_features == AIO_RING_INCOMPAT_FEATURES
+//It is a user space batch read io events implementation that attempts to read io avoiding any sys calls
+static int user_io_getevents(io_context_t aio_ctx, unsigned int max,
+			     struct io_event *events)
+{
+	long i = 0;
+	unsigned head;
+	struct aio_ring *ring = (struct aio_ring*) aio_ctx;
+    unsigned ring_nr = ring->nr;
+	while (i < max) {
+		head = ring->head;
+		mem_barrier();
+		//The kernel will write to the ring from an interrupt, releasing the events
+        //with a write to ring->tail, so we must load acquire here.
+        unsigned tail = ring->tail;
+        read_barrier();
+		if (head == tail) {
+			/* There are no more completions */
+			break;
+		} else {
+			events[i] = ring->io_events[head];
+			ring->head = (head + 1) % ring_nr;
+			store_barrier();
+			//it allow the kernel to build its own view of the ring buffer size
+			//and push new events concurrently
+			i++;
+		}
+	}
+	return i;
+}
+
 // We need a fast and reliable way to stop the blocked poller
 // for that we need a dumb file,
 // We are using a temporary file for this.
@@ -458,7 +512,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_de
     pthread_mutex_unlock(&(theControl->pollLock));
 
     // To return any pending IOCBs
-    int result = io_getevents(theControl->ioContext, 0, 1, theControl->events, 0);
+    int result = user_io_getevents(theControl->ioContext, 1, theControl->events);
     for (i = 0; i < result; i++) {
         struct io_event * event = &(theControl->events[i]);
         struct iocb * iocbp = event->obj;
@@ -563,7 +617,7 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_su
 }
 
 JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_blockedPoll
-  (JNIEnv * env, jobject thisObject, jobject contextPointer, jboolean useFdatasync) {
+  (JNIEnv * env, jobject thisObject, jobject contextPointer, jboolean useFdatasync, jboolean spinWait) {
 
     #ifdef DEBUG
        fprintf (stdout, "Running blockedPoll\n");
@@ -584,7 +638,13 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_bl
 
     while (running) {
 
-        int result = io_getevents(theControl->ioContext, 1, max, theControl->events, 0);
+        int result = user_io_getevents(theControl->ioContext, max, theControl->events);
+        if (result == 0) {
+            if (spinWait) {
+                continue;
+            }
+            result = io_getevents(theControl->ioContext, 1, max, theControl->events, 0);
+        }
 
         if (result == -EINTR)
         {
@@ -674,8 +734,12 @@ JNIEXPORT jint JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_po
       return 0;
     }
 
-
-    int result = io_getevents(theControl->ioContext, min, max, theControl->events, 0);
+    int result;
+    if (min == 0 && max > 0) {
+        result = user_io_getevents(theControl->ioContext, max, theControl->events);
+    } else {
+        result = io_getevents(theControl->ioContext, min, max, theControl->events, 0);
+    }
     int retVal = result;
 
     for (i = 0; i < result; i++) {
