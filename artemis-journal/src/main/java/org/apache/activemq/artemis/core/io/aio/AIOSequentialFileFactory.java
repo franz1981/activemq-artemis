@@ -241,7 +241,7 @@ public final class AIOSequentialFileFactory extends AbstractSequentialFileFactor
 
          this.running.set(true);
 
-         pollerThread = new PollerThread();
+         pollerThread = new PollerThread(bufferTimeout == 0);
          pollerThread.start();
       }
 
@@ -386,15 +386,18 @@ public final class AIOSequentialFileFactory extends AbstractSequentialFileFactor
 
    private class PollerThread extends Thread {
 
-      private PollerThread() {
+      private final boolean spinWait;
+
+      private PollerThread(boolean spinWait) {
          super("Apache ActiveMQ Artemis libaio poller");
+         this.spinWait = spinWait;
       }
 
       @Override
       public void run() {
          while (running.get()) {
             try {
-               libaioContext.poll();
+               libaioContext.poll(spinWait);
             } catch (Throwable e) {
                ActiveMQJournalLogger.LOGGER.warn(e.getMessage(), e);
                onIOError(new ActiveMQException("Error on libaio poll"), e.getMessage(), null);

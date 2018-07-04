@@ -344,6 +344,12 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
       return released;
    }
 
+   public void poll(boolean spinWait) {
+      if (!closed.get()) {
+         blockedPoll(ioContext, useFdatasync, spinWait);
+      }
+   }
+
    /**
     * It will start polling and will keep doing until the context is closed.
     * This will call callbacks on {@link SubmitInfo#onError(int, String)} and
@@ -352,9 +358,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
     * {@link SubmitInfo#done()} are called.
     */
    public void poll() {
-      if (!closed.get()) {
-         blockedPoll(ioContext, useFdatasync);
-      }
+      poll(false);
    }
 
    /**

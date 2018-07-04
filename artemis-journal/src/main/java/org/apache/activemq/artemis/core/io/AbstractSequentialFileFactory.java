@@ -171,7 +171,7 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
    @Override
    public void start() {
       //TODO special handling: improve me please, it is just to get the alignemnt final on Batching buffer
-      if (writeBuffer == null && bufferTimeout > 0) {
+      if (writeBuffer == null && bufferTimeout >= 0) {
          if (this instanceof AIOSequentialFileFactory) {
             BatchingBuffer batchBuffer = new BatchingBuffer(criticalAnalyzer, getAlignment(), Math.min(maxIO, 128), bufferSize, new LiteTimeoutBlockingWaitStrategy(bufferTimeout, TimeUnit.NANOSECONDS));
             criticalAnalyzer.add(batchBuffer);
