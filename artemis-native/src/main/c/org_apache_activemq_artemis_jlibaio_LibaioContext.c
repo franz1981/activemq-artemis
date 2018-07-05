@@ -620,6 +620,65 @@ JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_su
     submit(env, theControl, iocb);
 }
 
+JNIEXPORT jint JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_batchPoll
+  (JNIEnv * env, jobject thisObject, jobject contextPointer, jint max, jboolean useFdatasync) {
+
+    int i;
+    struct io_control * theControl = getIOControl(env, contextPointer);
+    if (theControl == NULL) {
+      return 0;
+    }
+    max = theControl->queueSize < max ? theControl->queueSize : max;
+
+    int lastFile = -1;
+
+    int result = user_io_getevents(theControl->ioContext, max, theControl->events);
+    if (result == 0) {
+        return 0;
+    }
+
+    lastFile = -1;
+    int ignored_events = 0;
+    for (i = 0; i < result; i++)
+    {
+        struct io_event * event = &(theControl->events[i]);
+        struct iocb * iocbp = event->obj;
+
+        if (iocbp->aio_fildes == dumbWriteHandler) {
+           putIOCB(theControl, iocbp);
+           //ignore the event
+           ignored_events++;
+           continue;
+        }
+
+        if (useFdatasync && lastFile != iocbp->aio_fildes) {
+            lastFile = iocbp->aio_fildes;
+            fdatasync(lastFile);
+        }
+
+
+        int eventResult = (int)event->res;
+
+        if (eventResult < 0) {
+            jstring jstrError = (*env)->NewStringUTF(env, strerror(-eventResult));
+
+            if (iocbp->data != NULL) {
+                (*env)->CallVoidMethod(env, (jobject)(iocbp->data), errorMethod, (jint)(-eventResult), jstrError);
+            }
+        }
+
+        jobject obj = (jobject)iocbp->data;
+        putIOCB(theControl, iocbp);
+
+        if (obj != NULL) {
+            (*env)->CallVoidMethod(env, theControl->thisObject, libaioContextDone,obj);
+            // We delete the globalRef after the completion of the callback
+            (*env)->DeleteGlobalRef(env, obj);
+        }
+    }
+    return result - ignored_events;
+  }
+
 JNIEXPORT void JNICALL Java_org_apache_activemq_artemis_jlibaio_LibaioContext_blockedPoll
   (JNIEnv * env, jobject thisObject, jobject contextPointer, jboolean useFdatasync, jboolean spinWait) {
 

@@ -144,7 +144,7 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
 
    final Semaphore ioSpace;
 
-   final int queueSize;
+   public final int queueSize;
 
    final boolean useFdatasync;
 
@@ -344,6 +344,13 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
       return released;
    }
 
+   public int poll(int limit) {
+      if (closed.get()) {
+         return 0;
+      }
+      return batchPoll(ioContext, limit, useFdatasync);
+   }
+
    public void poll(boolean spinWait) {
       if (!closed.get()) {
          blockedPoll(ioContext, useFdatasync, spinWait);
@@ -444,6 +451,8 @@ public class LibaioContext<Callback extends SubmitInfo> implements Closeable {
    private void blockedPoll(ByteBuffer libaioContext, boolean useFdatasync) {
       blockedPoll(libaioContext, useFdatasync, false);
    }
+
+   native int batchPoll(ByteBuffer libaioContext, int limit, boolean useFdatasync);
 
    /**
     * This method will block as long as the context is open.

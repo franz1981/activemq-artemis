@@ -20,8 +20,11 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import com.lmax.disruptor.LiteTimeoutBlockingWaitStrategy;
+import com.lmax.disruptor.WaitStrategy;
 import org.apache.activemq.artemis.ArtemisConstants;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
@@ -30,6 +33,7 @@ import org.apache.activemq.artemis.core.io.AbstractSequentialFileFactory;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.io.SequentialFile;
+import org.apache.activemq.artemis.core.io.buffer.BatchingBuffer;
 import org.apache.activemq.artemis.jlibaio.LibaioContext;
 import org.apache.activemq.artemis.jlibaio.LibaioFile;
 import org.apache.activemq.artemis.jlibaio.SubmitInfo;
@@ -235,14 +239,27 @@ public final class AIOSequentialFileFactory extends AbstractSequentialFileFactor
    @Override
    public void start() {
       if (running.compareAndSet(false, true)) {
-         super.start();
-
          this.libaioContext = new LibaioContext(maxIO, true, dataSync);
-
+         if (writeBuffer == null && bufferTimeout >= 0) {
+            final WaitStrategy waitStrategy;
+            if (bufferTimeout == 0) {
+               //burn just one CPU :P
+               waitStrategy = new AioPollWaitStrategy(this.libaioContext);
+            } else {
+               waitStrategy = new LiteTimeoutBlockingWaitStrategy(bufferTimeout, TimeUnit.NANOSECONDS);
+            }
+            BatchingBuffer batchBuffer = new BatchingBuffer(criticalAnalyzer, getAlignment(), Math.min(maxIO, 128), bufferSize, waitStrategy);
+            criticalAnalyzer.add(batchBuffer);
+            writeBuffer = batchBuffer;
+         }
+         super.start();
          this.running.set(true);
-
-         pollerThread = new PollerThread(bufferTimeout == 0);
-         pollerThread.start();
+         //Use a separate poller only if is needed
+         if (writeBuffer != null && bufferTimeout > 0) {
+            final boolean spinWait = bufferTimeout < TimeUnit.MICROSECONDS.toNanos(1);
+            pollerThread = new PollerThread(spinWait);
+            pollerThread.start();
+         }
       }
 
    }

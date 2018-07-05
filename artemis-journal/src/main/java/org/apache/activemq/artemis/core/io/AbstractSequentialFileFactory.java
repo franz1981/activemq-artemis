@@ -29,10 +29,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import com.lmax.disruptor.LiteTimeoutBlockingWaitStrategy;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
 import org.apache.activemq.artemis.core.io.aio.AIOSequentialFileFactory;
-import org.apache.activemq.artemis.core.io.buffer.BatchingBuffer;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
 import org.apache.activemq.artemis.core.io.buffer.WriteBuffer;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
@@ -170,14 +168,6 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
 
    @Override
    public void start() {
-      //TODO special handling: improve me please, it is just to get the alignemnt final on Batching buffer
-      if (writeBuffer == null && bufferTimeout >= 0) {
-         if (this instanceof AIOSequentialFileFactory) {
-            BatchingBuffer batchBuffer = new BatchingBuffer(criticalAnalyzer, getAlignment(), Math.min(maxIO, 128), bufferSize, new LiteTimeoutBlockingWaitStrategy(bufferTimeout, TimeUnit.NANOSECONDS));
-            criticalAnalyzer.add(batchBuffer);
-            writeBuffer = batchBuffer;
-         }
-      }
       if (writeBuffer != null) {
          writeBuffer.start();
       }
