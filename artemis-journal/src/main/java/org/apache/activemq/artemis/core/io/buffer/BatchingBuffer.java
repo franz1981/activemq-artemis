@@ -30,6 +30,7 @@ import com.lmax.disruptor.WaitStrategy;
 import com.lmax.disruptor.dsl.Disruptor;
 import com.lmax.disruptor.dsl.ProducerType;
 import io.netty.buffer.Unpooled;
+import org.HdrHistogram.Histogram;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
@@ -201,6 +202,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
                this.currentBatchSize = 0;
                this.batchBuffer = null;
                this.requiredSync = false;
+               batchDistribution.recordValue(ioCallbacks.size());
                this.ioCallbacks.clear();
             }
          }
@@ -222,6 +224,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
    private int expectedRemainingSize;
    private final WaitStrategy waitStrategy;
    private final int writeAlignment;
+   private final Histogram batchDistribution;
 
    public BatchingBuffer(CriticalAnalyzer analyzer,
                          int writeAlignment,
@@ -237,6 +240,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
          throw new IllegalArgumentException("write alignment = " + writeAlignment + " should be a pow of 2!");
       }
       this.writeAlignment = writeAlignment;
+      this.batchDistribution = new Histogram(1, capacity, 0);
    }
 
    //branch-less pow of 2 align
@@ -250,6 +254,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
       try {
          synchronized (this) {
             if (this.disruptor == null) {
+               this.batchDistribution.reset();
                this.disruptor = new Disruptor<>(Operation::new, capacity, r -> {
                   final Thread t = new Thread(r);
                   t.setName("activemq-batching-buffer");
@@ -276,6 +281,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
                   this.disruptor = null;
                   this.operations = null;
                   this.expectedRemainingSize = 0;
+                  batchDistribution.outputPercentileDistribution(System.out, 1d);
                }
             }
          }
