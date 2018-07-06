@@ -46,7 +46,7 @@ final class AioPollWaitStrategy implements WaitStrategy {
       }
       while ((availableSequence = dependentSequence.get()) < sequence) {
          while (libaioContext.poll(queueSize) > 0) {
-
+            counter = SPIN_TRIES;
          }
          counter = applyWaitMethod(barrier, counter);
       }
