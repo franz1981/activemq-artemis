@@ -99,13 +99,14 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
                   //addBytes
                   final ChannelBufferWrapper buffer = event.writtenBytes;
                   final int expectedWrite = buffer.readableBytes();
+                  final boolean eventRequiredSync = event.requiredSync;
                   if (batchBuffer == null) {
-                     allocateBatchBuffer(endOfBatch, expectedWrite);
+                     allocateBatchBuffer(endOfBatch, eventRequiredSync, expectedWrite);
                   } else if (expectedWrite > batchBuffer.remaining()) {
                      //need to flush the current batch to allow further writes
                      flushBatch();
                      if (batchBuffer == null) {
-                        allocateBatchBuffer(endOfBatch, expectedWrite);
+                        allocateBatchBuffer(endOfBatch, eventRequiredSync, expectedWrite);
                      }
                   }
                   assert expectedWrite <= batchBuffer.remaining();
@@ -115,7 +116,6 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
                      batchBuffer.limit(startingPosition + expectedWrite);
                      buffer.getBytes(0, batchBuffer);
                   } finally {
-                     final boolean eventRequiredSync = event.requiredSync;
                      final IOCallback eventIoCallback = event.ioCallback;
                      if (eventRequiredSync) {
                         requiredSync = true;
@@ -127,7 +127,7 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
                      //restore batch limit
                      batchBuffer.limit(batchLimit);
                   }
-                  if (endOfBatch || !batchBuffer.hasRemaining()) {
+                  if ((endOfBatch && requiredSync) || !batchBuffer.hasRemaining()) {
                      flushBatch();
                   }
                   break;
@@ -175,10 +175,10 @@ public final class BatchingBuffer extends CriticalComponentImpl implements Write
          }
       }
 
-      private void allocateBatchBuffer(boolean endOfBatch, int expectedWrite) {
+      private void allocateBatchBuffer(boolean endOfBatch, boolean requiredSync, int expectedWrite) {
          assert batchBuffer == null;
          final int bufferLimit;
-         if (endOfBatch) {
+         if (endOfBatch && requiredSync) {
             bufferLimit = expectedWrite;
          } else {
             bufferLimit = Math.max(maxBatchSize, expectedWrite);
