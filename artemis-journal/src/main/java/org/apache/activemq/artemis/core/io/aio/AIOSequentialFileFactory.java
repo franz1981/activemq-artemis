@@ -239,7 +239,7 @@ public final class AIOSequentialFileFactory extends AbstractSequentialFileFactor
    @Override
    public void start() {
       if (running.compareAndSet(false, true)) {
-         this.libaioContext = new LibaioContext(maxIO, false, dataSync);
+         this.libaioContext = new LibaioContext(maxIO, true, dataSync);
          if (writeBuffer == null && bufferTimeout >= 0) {
             final WaitStrategy waitStrategy;
             if (bufferTimeout == 0) {
