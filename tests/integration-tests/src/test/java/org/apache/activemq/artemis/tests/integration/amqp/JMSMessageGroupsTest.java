@@ -16,8 +16,6 @@
  */
 package org.apache.activemq.artemis.tests.integration.amqp;
 
-import java.util.concurrent.atomic.AtomicInteger;
-
 import javax.jms.BytesMessage;
 import javax.jms.Connection;
 import javax.jms.DeliveryMode;
@@ -26,7 +24,11 @@ import javax.jms.MessageConsumer;
 import javax.jms.MessageProducer;
 import javax.jms.Queue;
 import javax.jms.Session;
+import javax.jms.TextMessage;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
+import org.apache.activemq.artemis.jms.client.ActiveMQQueue;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +55,95 @@ public class JMSMessageGroupsTest extends JMSClientTestSupport {
          } finally {
             connection.close();
          }
+      }
+   }
+
+   @Test
+   public void testManyMessagesDeliveredToOnlyOneConsumerNoGroup() throws Exception {
+      Connection connection = createConnection();
+      try {
+         ActiveMQDestination destination = new ActiveMQQueue("TEST");
+         // Setup a first connection
+         connection.start();
+         final int test = 10;
+         for (int t = 0; t < test; t++) {
+            System.out.println("Test " + (t + 1) + " started");
+            Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            MessageConsumer consumer1 = session.createConsumer(destination);
+            MessageProducer producer = session.createProducer(destination);
+            final int messages = 5_000;
+            // Send the messages.
+            for (int i = 0; i < messages; i++) {
+               TextMessage message = session.createTextMessage("message " + i);
+               LOG.info("sending message: " + message);
+               producer.send(message);
+            }
+            System.out.println("sent all messages: start receiving in 10 seconds");
+            Thread.sleep(10_000);
+            System.out.println("start receiving");
+
+            // All the messages should have been sent down connection 1.. just get
+            // the first 3
+            for (int i = 0; i < messages; i++) {
+               TextMessage m1 = (TextMessage) consumer1.receive(500);
+               assertNotNull("m1 is null for index: " + i, m1);
+            }
+            System.out.println("received all messages");
+            // Close the first consumer.
+            consumer1.close();
+
+            session.close();
+         }
+      } finally {
+         connection.close();
+      }
+   }
+
+   @Test
+   public void testManyMessagesDeliveredToOnlyOneConsumer() throws Exception {
+      Connection connection = createConnection();
+      try {
+         ActiveMQDestination destination = new ActiveMQQueue("TEST");
+         // Setup a first connection
+         connection.start();
+         final int test = 10;
+         for (int t = 0; t < test; t++) {
+            System.out.println("Test " + (t + 1) + " started");
+            Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            MessageConsumer consumer1 = session.createConsumer(destination);
+            MessageConsumer consumer2 = session.createConsumer(destination);
+            MessageConsumer consumer3 = session.createConsumer(destination);
+            MessageProducer producer = session.createProducer(destination);
+            final int messages = 5_000;
+            // Send the messages.
+            for (int i = 0; i < messages; i++) {
+               TextMessage message = session.createTextMessage("message " + i);
+               message.setStringProperty("JMSXGroupID", "TEST-GROUP");
+               message.setIntProperty("JMSXGroupSeq", i + 1);
+               LOG.info("sending message: " + message);
+               producer.send(message);
+            }
+            System.out.println("sent all messages: start receiving in 10 seconds");
+            Thread.sleep(10_000);
+            System.out.println("start receiving");
+
+            // All the messages should have been sent down connection 1.. just get
+            // the first 3
+            for (int i = 0; i < messages; i++) {
+               TextMessage m1 = (TextMessage) consumer1.receive(500);
+               assertNotNull("m1 is null for index: " + i, m1);
+               assertEquals(m1.getIntProperty("JMSXGroupSeq"), i + 1);
+            }
+            System.out.println("received all messages");
+            // Close the first consumer.
+            consumer1.close();
+            consumer2.close();
+            consumer3.close();
+
+            session.close();
+         }
+      } finally {
+         connection.close();
       }
    }
 
