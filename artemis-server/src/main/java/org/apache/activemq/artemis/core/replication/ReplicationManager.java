@@ -380,18 +380,26 @@ public final class ReplicationManager implements ActiveMQComponent {
     * In case you refactor this in any way, this method must hold a lock on replication lock. .
     */
    private boolean flowControl(int size) {
-      boolean flowWorked = replicatingChannel.getConnection().blockUntilWritable(size, timeout);
-
-      if (!flowWorked) {
+      try {
+         final boolean flowWorked = replicatingChannel.getConnection().blockUntilWritable(size, timeout);
+         if (!flowWorked) {
+            try {
+               ActiveMQServerLogger.LOGGER.slowReplicationResponse();
+               stop();
+            } catch (Exception e) {
+               logger.warn(e.getMessage(), e);
+            }
+         }
+         return flowWorked;
+      } catch (IllegalStateException e) {
+         logger.warn(e.getMessage(), e);
          try {
-            ActiveMQServerLogger.LOGGER.slowReplicationResponse();
             stop();
-         } catch (Exception e) {
+         } catch (Exception ex) {
             logger.warn(e.getMessage(), e);
          }
+         return false;
       }
-
-      return flowWorked;
    }
 
    /**
