@@ -186,6 +186,17 @@ public interface Configuration {
    Configuration setThreadPoolMaxSize(int maxSize);
 
    /**
+    * Returns the minimum number of threads in the thread pool of this server. <br>
+    * Default value is {@link org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration#DEFAULT_THREAD_POOL_MIN_SIZE}.
+    */
+   int getThreadPoolMinSize();
+
+   /**
+    * Sets the minimum number of threads in the thread pool of this server.
+    */
+   Configuration setThreadPoolMinSize(int maxSize);
+
+   /**
     * Returns the maximum number of threads in the <em>scheduled</em> thread pool of this server. <br>
     * Default value is {@link org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration#DEFAULT_SCHEDULED_THREAD_POOL_MAX_SIZE}.
     */

@@ -88,6 +88,14 @@
             </xsd:annotation>
          </xsd:element>
 
+         <xsd:element name="thread-pool-min-size" type="xsd:int" default="0" maxOccurs="1" minOccurs="0">
+            <xsd:annotation>
+               <xsd:documentation>
+                  Minimum number of threads to use for the thread pool.
+               </xsd:documentation>
+            </xsd:annotation>
+         </xsd:element>
+
          <xsd:element name="graceful-shutdown-enabled" type="xsd:boolean" default="false" maxOccurs="1" minOccurs="0">
             <xsd:annotation>
                <xsd:documentation>

@@ -16,7 +16,6 @@
  */
 package org.apache.activemq.artemis.core.server.impl;
 
-import java.util.concurrent.atomic.AtomicBoolean;
 import javax.management.MBeanServer;
 import java.io.File;
 import java.io.IOException;
@@ -41,6 +40,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.Semaphore;
@@ -48,6 +48,7 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -179,6 +180,7 @@ import org.apache.activemq.artemis.spi.core.protocol.ProtocolManagerFactory;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
 import org.apache.activemq.artemis.spi.core.security.ActiveMQSecurityManager;
+import org.apache.activemq.artemis.utils.ActiveMQForkJoinWorkerThreadFactory;
 import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.apache.activemq.artemis.utils.ActiveMQThreadPoolExecutor;
 import org.apache.activemq.artemis.utils.CompositeAddress;
@@ -2444,6 +2446,24 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       }
    }
 
+   private static ThreadFactory createThreadFactory() {
+      return AccessController.doPrivileged(new PrivilegedAction<ThreadFactory>() {
+         @Override
+         public ThreadFactory run() {
+            return new ActiveMQThreadFactory("ActiveMQ-server-" + this.toString(), false, ClientSessionFactoryImpl.class.getClassLoader());
+         }
+      });
+   }
+
+   private static ForkJoinPool.ForkJoinWorkerThreadFactory createForkJoinThreadFactory() {
+      return AccessController.doPrivileged(new PrivilegedAction<ForkJoinPool.ForkJoinWorkerThreadFactory>() {
+         @Override
+         public ForkJoinPool.ForkJoinWorkerThreadFactory run() {
+            return new ActiveMQForkJoinWorkerThreadFactory("ActiveMQ-server-" + this.toString(), false, ClientSessionFactoryImpl.class.getClassLoader());
+         }
+      });
+   }
+
    /**
     * Sets up ActiveMQ Artemis Executor Services.
     */
@@ -2452,17 +2472,12 @@ public class ActiveMQServerImpl implements ActiveMQServer {
        * Executor based on the provided Thread pool.  Otherwise we create a new ThreadPool.
        */
       if (serviceRegistry.getExecutorService() == null) {
-         ThreadFactory tFactory = AccessController.doPrivileged(new PrivilegedAction<ThreadFactory>() {
-            @Override
-            public ThreadFactory run() {
-               return new ActiveMQThreadFactory("ActiveMQ-server-" + this.toString(), false, ClientSessionFactoryImpl.class.getClassLoader());
-            }
-         });
-
          if (configuration.getThreadPoolMaxSize() == -1) {
-            threadPool = new ThreadPoolExecutor(0, Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), tFactory);
+            threadPool = new ThreadPoolExecutor(configuration.getThreadPoolMinSize(), Integer.MAX_VALUE, 60L, TimeUnit.SECONDS, new SynchronousQueue<Runnable>(), createThreadFactory());
+         } else if (configuration.getThreadPoolMaxSize() != configuration.getThreadPoolMinSize()) {
+            threadPool = new ActiveMQThreadPoolExecutor(configuration.getThreadPoolMinSize(), configuration.getThreadPoolMaxSize(), 60L, TimeUnit.SECONDS, createThreadFactory());
          } else {
-            threadPool = new ActiveMQThreadPoolExecutor(0, configuration.getThreadPoolMaxSize(), 60L, TimeUnit.SECONDS, tFactory);
+            threadPool = new ForkJoinPool(configuration.getThreadPoolMaxSize(), createForkJoinThreadFactory(), null, false);
          }
       } else {
          threadPool = serviceRegistry.getExecutorService();

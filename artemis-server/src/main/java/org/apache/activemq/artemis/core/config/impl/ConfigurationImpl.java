@@ -114,6 +114,8 @@ public class ConfigurationImpl implements Configuration, Serializable {
 
    private int threadPoolMaxSize = ActiveMQDefaultConfiguration.getDefaultThreadPoolMaxSize();
 
+   private int threadPoolMinSize = ActiveMQDefaultConfiguration.getDefaultThreadPoolMinSize();
+
    private long securityInvalidationInterval = ActiveMQDefaultConfiguration.getDefaultSecurityInvalidationInterval();
 
    private boolean securityEnabled = ActiveMQDefaultConfiguration.isDefaultSecurityEnabled();
@@ -468,6 +470,17 @@ public class ConfigurationImpl implements Configuration, Serializable {
    @Override
    public ConfigurationImpl setThreadPoolMaxSize(final int maxSize) {
       threadPoolMaxSize = maxSize;
+      return this;
+   }
+
+   @Override
+   public int getThreadPoolMinSize() {
+      return threadPoolMinSize;
+   }
+
+   @Override
+   public Configuration setThreadPoolMinSize(int minSize) {
+      threadPoolMinSize = minSize;
       return this;
    }
 

@@ -144,6 +144,9 @@ public final class ActiveMQDefaultConfiguration {
    // Maximum number of threads to use for the thread pool. -1 means 'no limits'.
    private static int DEFAULT_THREAD_POOL_MAX_SIZE = 30;
 
+   // Minimum number of threads to use for the thread pool.
+   private static int DEFAULT_THREAD_POOL_MIN_SIZE = 0;
+
    // true means that security is enabled
    private static boolean DEFAULT_SECURITY_ENABLED = true;
 
@@ -558,6 +561,13 @@ public final class ActiveMQDefaultConfiguration {
     */
    public static int getDefaultThreadPoolMaxSize() {
       return DEFAULT_THREAD_POOL_MAX_SIZE;
+   }
+
+   /**
+    * Minimum number of threads to use for the thread pool.
+    */
+   public static int getDefaultThreadPoolMinSize() {
+      return DEFAULT_THREAD_POOL_MIN_SIZE;
    }
 
    /**

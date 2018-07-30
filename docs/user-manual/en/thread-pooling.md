@@ -42,6 +42,9 @@ This general purpose thread pool is used for most asynchronous actions
 on the server side. It maps internally to a
 `java.util.concurrent.ThreadPoolExecutor` instance.
 
+The minimum number of thread used by this pool is configure in
+`broker.xml` with the `thread-pool-min-size` parameter.
+
 The maximum number of thread used by this pool is configure in
 `broker.xml` with the `thread-pool-max-size` parameter.
 
@@ -58,6 +61,8 @@ recommended that a bounded thread pool is used with caution since it can
 lead to dead-lock situations if the upper bound is chosen to be too low.
 
 The default value for `thread-pool-max-size` is `30`.
+
+The default value for `thread-pool-min-size` is `0`.
 
 See the [J2SE
 javadoc](https://docs.oracle.com/javase/8/docs/api/java/util/concurrent/ThreadPoolExecutor.html)

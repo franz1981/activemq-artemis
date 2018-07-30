@@ -322,6 +322,8 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
 
       config.setThreadPoolMaxSize(getInteger(e, "thread-pool-max-size", config.getThreadPoolMaxSize(), Validators.MINUS_ONE_OR_GT_ZERO));
 
+      config.setThreadPoolMinSize(getInteger(e, "thread-pool-min-size", config.getThreadPoolMinSize(), Validators.GE_ZERO));
+
       config.setSecurityEnabled(getBoolean(e, "security-enabled", config.isSecurityEnabled()));
 
       config.setGracefulShutdownEnabled(getBoolean(e, "graceful-shutdown-enabled", config.isGracefulShutdownEnabled()));
