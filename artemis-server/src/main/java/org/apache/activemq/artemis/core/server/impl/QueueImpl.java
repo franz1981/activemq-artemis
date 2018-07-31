@@ -2336,6 +2336,9 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
 
                   if (groupConsumer != null) {
                      consumer = groupConsumer;
+                     //if there's a groupConsumer is like there aren't any other consumers
+                     endPos = pos;
+                     size = 1;
                   }
                }
 

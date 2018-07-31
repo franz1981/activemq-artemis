@@ -37,6 +37,8 @@ import javax.jms.Session;
 import javax.jms.TextMessage;
 
 import org.apache.activemq.artemis.core.server.Queue;
+import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
+import org.apache.activemq.artemis.jms.client.ActiveMQQueue;
 import org.apache.activemq.artemis.tests.util.Wait;
 import org.apache.qpid.jms.JmsConnection;
 import org.apache.qpid.jms.policy.JmsDefaultPrefetchPolicy;
@@ -59,6 +61,55 @@ public class JMSMessageConsumerTest extends JMSClientTestSupport {
       Connection connection = createConnection(); //AMQP
       Connection connection2 = createCoreConnection(); //CORE
       testDeliveryMode(connection, connection2);
+   }
+
+   @Test
+   public void testManyMessagesDeliveredToOnlyOneConsumer() throws Exception {
+      Connection connection = createCoreConnection();
+      try {
+         ActiveMQDestination destination = new ActiveMQQueue("TEST");
+         // Setup a first connection
+         connection.start();
+         final int test = 1;
+         for (int t = 0; t < test; t++) {
+            System.out.println("Test " + (t + 1) + " started");
+            Session session = connection.createSession(false, Session.AUTO_ACKNOWLEDGE);
+            MessageConsumer consumer1 = session.createConsumer(destination);
+            MessageConsumer consumer2 = session.createConsumer(destination);
+            MessageProducer producer = session.createProducer(destination);
+            producer.setDeliveryMode(DeliveryMode.NON_PERSISTENT);
+            final int messages = 5_000;
+            // Send the messages.
+            final long startProduce = System.currentTimeMillis();
+            for (int i = 0; i < messages; i++) {
+               TextMessage message = session.createTextMessage("message " + i);
+               message.setStringProperty("JMSXGroupID", "TEST-GROUP");
+               message.setIntProperty("JMSXGroupSeq", i + 1);
+               LOG.info("sending message: " + message);
+               producer.send(message);
+            }
+            final long elapsedProduce = System.currentTimeMillis() - startProduce;
+            System.out.println("sent all messages tooks " + elapsedProduce + " ms: start receiving in 10 seconds");
+            Thread.sleep(30_000);
+            System.out.println("start receiving");
+
+            // All the messages should have been sent down connection 1.. just get
+            // the first 3
+            for (int i = 0; i < messages; i++) {
+               TextMessage m1 = (TextMessage) consumer1.receive(500);
+               assertNotNull("m1 is null for index: " + i, m1);
+               assertEquals(m1.getIntProperty("JMSXGroupSeq"), i + 1);
+            }
+            System.out.println("received all messages");
+            // Close the first consumer.
+            consumer1.close();
+            consumer2.close();
+
+            session.close();
+         }
+      } finally {
+         connection.close();
+      }
    }
 
    @Test(timeout = 30000)
