@@ -34,6 +34,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.io.SequentialFile;
+import org.apache.activemq.artemis.core.io.util.FileIOUtil;
 import org.apache.activemq.artemis.jdbc.store.drivers.JDBCUtils;
 import org.apache.activemq.artemis.jdbc.store.file.JDBCSequentialFile;
 import org.apache.activemq.artemis.jdbc.store.file.JDBCSequentialFileFactory;
@@ -81,6 +82,46 @@ public class JDBCSequentialFileFactoryTest {
    public void tearDown() throws Exception {
       executor.shutdown();
       factory.destroy();
+   }
+
+   @Test
+   public void testCopy() throws Exception {
+      SequentialFile file = factory.createSequentialFile("file1.bin");
+      file.open();
+
+      ByteBuffer buffer = ByteBuffer.allocate(204800);
+      buffer.put(new byte[204800]);
+      buffer.rewind();
+      file.writeDirect(buffer, true);
+
+      buffer = ByteBuffer.allocate(409605);
+      buffer.put(new byte[409605]);
+      buffer.rewind();
+
+      SequentialFile file2 = factory.createSequentialFile("file2.bin");
+
+      file2.open();
+      file2.writeDirect(buffer, true);
+
+      // This is allocating a reusable buffer to perform the copy, just like it's used within LargeMessageInSync
+      buffer = ByteBuffer.allocate(4 * 1024);
+
+      SequentialFile newFile = factory.createSequentialFile("file1.cop");
+      FileIOUtil.copyData(file, newFile, buffer);
+
+      SequentialFile newFile2 = factory.createSequentialFile("file2.cop");
+      FileIOUtil.copyData(file2, newFile2, buffer);
+
+      Assert.assertEquals(file.size(), newFile.size());
+      Assert.assertEquals(file2.size(), newFile2.size());
+
+      newFile.close();
+      newFile2.close();
+      file.close();
+      file2.close();
+
+      System.out.println("Test result::");
+
    }
 
    @After
