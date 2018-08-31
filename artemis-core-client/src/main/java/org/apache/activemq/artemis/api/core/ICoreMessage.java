@@ -37,9 +37,18 @@ public interface ICoreMessage extends Message {
    InputStream getBodyInputStream();
 
    /**
-    * Returns a new Buffer slicing the current Body.
+    * Returns a new read-only Buffer slicing the current Body.
     */
    ActiveMQBuffer getReadOnlyBodyBuffer();
+
+   /**
+    * Returns a new Buffer slicing the current Body.<br>
+    * Dependently on the implementation it could share the same content of the body of this message:
+    * it is highly recommended to use it only for performance reason given that it allows to modify
+    * the body of the message.<br>
+    * It doesn't have to outlive the lifecycle of this message and must be used temporarily.
+    */
+   ActiveMQBuffer getBodyBufferSlice();
 
    /**
     * Returns a readOnlyBodyBuffer or a decompressed one if the message is compressed.

@@ -217,6 +217,13 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
       return new ChannelBufferWrapper(buffer.slice(BODY_OFFSET, endOfBodyPosition - BUFFER_HEADER_SPACE).setIndex(0, endOfBodyPosition - BUFFER_HEADER_SPACE).asReadOnly());
    }
 
+   @Override
+   public ActiveMQBuffer getBodyBufferSlice() {
+      checkEncode();
+      internalWritableBuffer();
+      return new ChannelBufferWrapper(buffer.slice(BODY_OFFSET, endOfBodyPosition - BUFFER_HEADER_SPACE).setIndex(0, endOfBodyPosition - BUFFER_HEADER_SPACE));
+   }
+
    /**
     * This will return the proper buffer to represent the data of the Message. If compressed it will decompress.
     * If large, it will read from the file or streaming.
@@ -247,14 +254,14 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
    }
 
    private ActiveMQBuffer getLargeMessageBuffer() throws ActiveMQException {
-      ActiveMQBuffer buffer;
       LargeBodyEncoder encoder = getBodyEncoder();
       encoder.open();
       int bodySize = (int) encoder.getLargeBodySize();
-
-      buffer = new ChannelBufferWrapper(UnpooledByteBufAllocator.DEFAULT.heapBuffer(bodySize));
-
-      encoder.encode(buffer, bodySize);
+      final ActiveMQBuffer buffer = new ChannelBufferWrapper(UnpooledByteBufAllocator.DEFAULT.heapBuffer(bodySize));
+      buffer.byteBuf().ensureWritable(bodySize);
+      final ByteBuffer nioBuffer = buffer.byteBuf().internalNioBuffer(0, bodySize);
+      encoder.encode(nioBuffer);
+      buffer.writerIndex(bodySize);
       encoder.close();
       return buffer;
    }
@@ -1147,16 +1154,16 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
       }
 
       @Override
-      public int encode(final ByteBuffer bufferRead) throws ActiveMQException {
-         ActiveMQBuffer buffer = ActiveMQBuffers.wrappedBuffer(bufferRead);
-         return encode(buffer, bufferRead.capacity());
-      }
-
-      @Override
-      public int encode(final ActiveMQBuffer bufferOut, final int size) {
-         bufferOut.byteBuf().writeBytes(buffer, lastPos, size);
-         lastPos += size;
-         return size;
+      public int encode(final ByteBuffer bufferOut) {
+         final int outRemaining = bufferOut.remaining();
+         final int remaining = Math.min(outRemaining, buffer.readableBytes());
+         final int skip = remaining - outRemaining;
+         if (skip < 0) {
+            bufferOut.limit(bufferOut.limit() + skip);
+         }
+         buffer.readBytes(bufferOut);
+         lastPos += remaining;
+         return remaining;
       }
    }
 

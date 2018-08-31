@@ -17,6 +17,7 @@
 package org.apache.activemq.artemis.core.server.impl;
 
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -27,8 +28,6 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
-import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQIllegalStateException;
 import org.apache.activemq.artemis.api.core.Message;
@@ -1182,12 +1181,25 @@ public class ServerConsumerImpl implements ServerConsumer, ReadyListener {
 
       private LargeBodyEncoder context;
 
+      private ByteBuffer chunkBytes;
+
       private LargeMessageDeliverer(final LargeServerMessage message, final MessageReference ref) throws Exception {
          largeMessage = message;
 
          largeMessage.incrementDelayDeletionCount();
 
          this.ref = ref;
+
+         this.chunkBytes = null;
+      }
+
+      private ByteBuffer acquireHeapBodyBuffer(int requiredCapacity) {
+         if (this.chunkBytes == null || this.chunkBytes.capacity() != requiredCapacity) {
+            this.chunkBytes = ByteBuffer.allocate(requiredCapacity);
+         } else {
+            this.chunkBytes.clear();
+         }
+         return this.chunkBytes;
       }
 
       public boolean deliver() throws Exception {
@@ -1250,21 +1262,23 @@ public class ServerConsumerImpl implements ServerConsumer, ReadyListener {
                   return false;
                }
 
-               int localChunkLen = 0;
+               final int localChunkLen = (int) Math.min(sizePendingLargeMessage - positionPendingLargeMessage, minLargeMessageSize);
 
-               localChunkLen = (int) Math.min(sizePendingLargeMessage - positionPendingLargeMessage, minLargeMessageSize);
+               final ByteBuffer bodyBuffer = acquireHeapBodyBuffer(localChunkLen);
 
-               ActiveMQBuffer bodyBuffer = ActiveMQBuffers.fixedBuffer(localChunkLen);
+               assert bodyBuffer.remaining() == localChunkLen;
 
-               context.encode(bodyBuffer, localChunkLen);
+               final int readBytes = context.encode(bodyBuffer);
 
-               byte[] body;
+               assert readBytes == localChunkLen;
 
-               if (bodyBuffer.toByteBuffer().hasArray()) {
-                  body = bodyBuffer.toByteBuffer().array();
-               } else {
-                  body = new byte[0];
-               }
+               final byte[] body = bodyBuffer.array();
+
+               assert body.length == readBytes;
+
+               //It is possible to recycle the same heap body buffer because it won't be cached by sendLargeMessageContinuation
+               //given that requiresResponse is false: ChannelImpl::send will use the resend cache only if
+               //resendCache != null && packet.isRequiresConfirmations()
 
                int packetSize = callback.sendLargeMessageContinuation(ServerConsumerImpl.this, body, positionPendingLargeMessage + localChunkLen < sizePendingLargeMessage, false);
 
@@ -1304,6 +1318,8 @@ public class ServerConsumerImpl implements ServerConsumer, ReadyListener {
 
       public void finish() throws Exception {
          synchronized (lock) {
+            this.chunkBytes = null;
+
             if (largeMessage == null) {
                // handleClose could be calling close while handle is also calling finish.
                // As a result one of them could get here after the largeMessage is already gone.

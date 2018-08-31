@@ -18,10 +18,9 @@ package org.apache.activemq.artemis.core.client.impl;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
-import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ICoreMessage;
 import org.apache.activemq.artemis.api.core.Message;
@@ -355,6 +354,15 @@ public class ClientProducerImpl implements ClientProducerInternal {
       credits.acquireCredits(creditsUsed);
    }
 
+   private static ByteBuffer acquireHeapBodyBuffer(ByteBuffer chunkBytes, int requiredCapacity) {
+      if (chunkBytes == null || chunkBytes.capacity() != requiredCapacity) {
+         chunkBytes = ByteBuffer.allocate(requiredCapacity);
+      } else {
+         chunkBytes.clear();
+      }
+      return chunkBytes;
+   }
+
    /**
     * Used to send serverMessages through the bridges. No need to validate compression here since
     * the message is only compressed at the client
@@ -376,21 +384,27 @@ public class ClientProducerImpl implements ClientProducerInternal {
       context.open();
       try {
 
+         ByteBuffer bodyBuffer = null;
+
          for (long pos = 0; pos < bodySize; ) {
             final boolean lastChunk;
 
             final int chunkLength = (int) Math.min((bodySize - pos), minLargeMessageSize);
 
-            final ActiveMQBuffer bodyBuffer = ActiveMQBuffers.fixedBuffer(chunkLength);
+            bodyBuffer = acquireHeapBodyBuffer(bodyBuffer, chunkLength);
 
-            context.encode(bodyBuffer, chunkLength);
+            assert bodyBuffer.array().length == chunkLength;
+
+            final int encodedSize = context.encode(bodyBuffer);
+
+            assert encodedSize == chunkLength;
 
             pos += chunkLength;
 
             lastChunk = pos >= bodySize;
             SendAcknowledgementHandler messageHandler = lastChunk ? handler : null;
 
-            int creditsUsed = sessionContext.sendServerLargeMessageChunk(msgI, -1, sendBlocking, lastChunk, bodyBuffer.toByteBuffer().array(), messageHandler);
+            int creditsUsed = sessionContext.sendServerLargeMessageChunk(msgI, -1, sendBlocking, lastChunk, bodyBuffer.array(), messageHandler);
 
             credits.acquireCredits(creditsUsed);
          }

@@ -17,8 +17,9 @@
 package org.apache.activemq.artemis.core.persistence.impl.journal;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+import io.netty.buffer.Unpooled;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
@@ -35,9 +36,9 @@ import org.apache.activemq.artemis.utils.DataConstants;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
 
-import io.netty.buffer.Unpooled;
-
 public final class LargeServerMessageImpl extends CoreMessage implements LargeServerMessage {
+
+   private static final AtomicIntegerFieldUpdater<LargeServerMessageImpl> DELAY_DELETION_COUNT_UPDATER = AtomicIntegerFieldUpdater.newUpdater(LargeServerMessageImpl.class, "delayDeletionCount");
 
    // Constants -----------------------------------------------------
    private static final Logger logger = Logger.getLogger(LargeServerMessageImpl.class);
@@ -53,13 +54,9 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
    // We should only use the NIO implementation on the Journal
    private SequentialFile file;
 
-   // set when a copyFrom is called
-   // The actual copy is done when finishCopy is called
-   private SequentialFile pendingCopy;
-
    private long bodySize = -1;
 
-   private final AtomicInteger delayDeletionCount = new AtomicInteger(0);
+   private volatile int delayDeletionCount = 0;
 
    // We cache this
    private volatile int memoryEstimate = -1;
@@ -132,6 +129,21 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
    }
 
    @Override
+   public synchronized void addBytes(final ActiveMQBuffer bytes) throws Exception {
+      validateFile();
+
+      if (!file.isOpen()) {
+         file.open();
+      }
+
+      final int readableBytes = bytes.readableBytes();
+
+      storageManager.addBytesToLargeMessage(file, getMessageID(), bytes);
+
+      bodySize += readableBytes;
+   }
+
+   @Override
    public synchronized int getEncodeSize() {
       return getHeadersAndPropertiesEncodeSize();
    }
@@ -148,7 +160,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
 
    @Override
    public synchronized void incrementDelayDeletionCount() {
-      delayDeletionCount.incrementAndGet();
+      DELAY_DELETION_COUNT_UPDATER.incrementAndGet(this);
       try {
          incrementRefCount();
       } catch (Exception e) {
@@ -158,7 +170,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
 
    @Override
    public synchronized void decrementDelayDeletionCount() throws Exception {
-      int count = delayDeletionCount.decrementAndGet();
+      int count = DELAY_DELETION_COUNT_UPDATER.decrementAndGet(this);
 
       decrementRefCount();
 
@@ -194,7 +206,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
       // We use <= as this could be used by load.
       // because of a failure, no references were loaded, so we have 0... and we still need to delete the associated
       // files
-      if (delayDeletionCount.get() <= 0) {
+      if (delayDeletionCount <= 0) {
          checkDelete();
       }
 
@@ -221,6 +233,11 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
          } catch (Exception ignored) {
          }
       }
+   }
+
+   @Override
+   public ActiveMQBuffer getBodyBufferSlice() {
+      return getReadOnlyBodyBuffer();
    }
 
    @Override
@@ -426,7 +443,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
 
    // Inner classes -------------------------------------------------
 
-   class DecodingContext implements LargeBodyEncoder {
+   final class DecodingContext implements LargeBodyEncoder {
 
       private SequentialFile cFile;
 
@@ -463,22 +480,6 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
          }
       }
 
-      @Override
-      public int encode(final ActiveMQBuffer bufferOut, final int size) throws ActiveMQException {
-         // This could maybe be optimized (maybe reading directly into bufferOut)
-         ByteBuffer bufferRead = ByteBuffer.allocate(size);
-
-         int bytesRead = encode(bufferRead);
-
-         bufferRead.flip();
-
-         if (bytesRead > 0) {
-            bufferOut.writeBytes(bufferRead.array(), 0, bytesRead);
-         }
-
-         return bytesRead;
-      }
-
       /* (non-Javadoc)
        * @see org.apache.activemq.artemis.core.message.LargeBodyEncoder#getLargeBodySize()
        */
@@ -487,4 +488,6 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
          return getBodySize();
       }
    }
+
+
 }
