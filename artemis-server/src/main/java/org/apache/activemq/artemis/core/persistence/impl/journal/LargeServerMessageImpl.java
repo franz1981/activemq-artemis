@@ -236,6 +236,24 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
    }
 
    @Override
+   public long getBodyBufferSize() {
+      final boolean closeFile = file == null;
+      try {
+         openFile();
+         return bodySize;
+      } catch (Exception e) {
+         throw new RuntimeException(e);
+      } finally {
+         if (closeFile) {
+            try {
+               file.close();
+            } catch (Exception ignored) {
+            }
+         }
+      }
+   }
+
+   @Override
    public ActiveMQBuffer getBodyBufferSlice() {
       return getReadOnlyBodyBuffer();
    }

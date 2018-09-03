@@ -51,6 +51,11 @@ public interface ICoreMessage extends Message {
    ActiveMQBuffer getBodyBufferSlice();
 
    /**
+    * Returns the {@link ActiveMQBuffer#readableBytes()} of the body buffer.
+    */
+   long getBodyBufferSize();
+
+   /**
     * Returns a readOnlyBodyBuffer or a decompressed one if the message is compressed.
     * or the large message buffer.
     * @return
