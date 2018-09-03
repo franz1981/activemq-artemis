@@ -162,7 +162,15 @@ public class NIOSequentialFile extends AbstractSequentialFile {
          if (channel == null) {
             throw new ActiveMQIllegalStateException("File " + this.getFileName() + " has a null channel");
          }
-         int bytesRead = channel.read(bytes);
+         final int bytesRead;
+         if (bytes.hasArray()) {
+            bytesRead = rfile.read(bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
+            if (bytesRead > 0) {
+               bytes.position(bytes.position() + bytesRead);
+            }
+         } else {
+            bytesRead = channel.read(bytes);
+         }
 
          if (callback != null) {
             callback.done();
@@ -298,7 +306,12 @@ public class NIOSequentialFile extends AbstractSequentialFile {
                                 final boolean sync,
                                 final IOCallback callback) throws IOException {
       try {
-         channel.write(bytes);
+         if (bytes.hasArray()) {
+            rfile.write(bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());
+            bytes.position(bytes.limit());
+         } else {
+            channel.write(bytes);
+         }
 
          if (sync) {
             sync();
