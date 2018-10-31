@@ -169,6 +169,109 @@ public class GlobalPagingTest extends PagingTest {
    }
 
    @Test
+   public void testManagementMessagesCanFlowWhileOthersAreFailing() throws Exception {
+      clearDataRecreateServerDirs();
+
+      Configuration config = createDefaultInVMConfig().setJournalSyncNonTransactional(false);
+
+      final ActiveMQServer server = createServer(true, config, PagingTest.PAGE_SIZE, -1);
+
+      try {
+         final int messageSize = 1024;
+         final long globalMaxSize = 1024 * messageSize;
+         final long addressMaxSize = globalMaxSize / 2;
+         final SimpleString managementAddress = config.getManagementAddress();
+         final AddressSettings managementAddressSettings = new AddressSettings()
+            .setPageSizeBytes(PagingTest.PAGE_SIZE)
+            .setMaxSizeBytes(-1)
+            .setAddressFullMessagePolicy(AddressFullMessagePolicy.FAIL);
+         server.getAddressSettingsRepository().addMatch(managementAddress.toString(), managementAddressSettings);
+
+         final AddressSettings addressSettings = new AddressSettings()
+            .setPageSizeBytes(PagingTest.PAGE_SIZE)
+            .setMaxSizeBytes(addressMaxSize)
+            .setAddressFullMessagePolicy(AddressFullMessagePolicy.FAIL);
+         server.getAddressSettingsRepository().addMatch(ADDRESS.toString(), addressSettings);
+
+         server.getConfiguration()
+            .setGlobalMaxSize(globalMaxSize);
+         server.getConfiguration();
+         server.start();
+
+         final ServerLocator locator = createInVMNonHALocator()
+            .setBlockOnNonDurableSend(true)
+            .setBlockOnDurableSend(true)
+            .setBlockOnAcknowledge(true);
+
+         try (ClientSessionFactory sf = createSessionFactory(locator);
+
+              ClientSession session = sf.createSession(false, true, true)) {
+
+            session.start();
+
+            if (server.locateQueue(managementAddress) == null) {
+
+               session.createQueue(managementAddress, managementAddress, null, true);
+            }
+
+            final SimpleString address = SimpleString.toSimpleString("queue");
+
+            if (server.locateQueue(address) == null) {
+
+               session.createQueue(address, address, null, true);
+            }
+
+            session.createQueue(ADDRESS, ADDRESS, null, true);
+
+            try (ClientSession addressSession = sf.createSession(false, true, true)) {
+               try (ClientProducer producer = addressSession.createProducer(ADDRESS)) {
+                  final int messages = (int) addressMaxSize / messageSize;
+                  Assert.assertTrue(messages > 0);
+                  sendFewMessages(messages, session, producer, new byte[messageSize]);
+                  Assert.fail("It should fail due to hitting address max size limits");
+               }
+            } catch (ActiveMQAddressFullException e) {
+               //it has to happen
+               final long addressSize = server.locateQueue(ADDRESS).getPageSubscription().getPagingStore().getAddressSize();
+               Assert.assertTrue(addressSize >= addressMaxSize);
+               Assert.assertTrue(addressSize < globalMaxSize);
+               Assert.assertTrue(globalMaxSize - addressSize > 0);
+            }
+
+            final long remaining = globalMaxSize - server.getPagingManager().getGlobalSize();
+
+            try (ClientRequestor requestor = new ClientRequestor(session, managementAddress)) {
+
+               ClientMessage message = session.createMessage(false);
+
+               ManagementHelper.putAttribute(message, "queue." + address.toString(), "messageCount");
+
+               final long estimatedRequestsSize = 1137;
+
+               final int requests = (int) (remaining / estimatedRequestsSize) - 1;
+
+               Assert.assertTrue(requests > 0);
+
+               for (int i = 0; i < requests; i++) {
+
+                  try {
+                     ClientMessage reply = requestor.request(message);
+                     Assert.assertEquals(0L, ManagementHelper.getResult(reply));
+                  } catch (ActiveMQAddressFullException e) {
+                     Assert.fail(e.getMessage());
+                  }
+               }
+
+            }
+
+         }
+
+      } finally {
+         server.stop(true);
+      }
+   }
+
+   @Test
    public void testPagingOverFullDisk() throws Exception {
       if (storeType == StoreConfiguration.StoreType.DATABASE) return;
 
