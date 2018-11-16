@@ -79,8 +79,6 @@ public class OrderedExecutorSanityTest {
       }
    }
 
-
-
    @Test
    public void shutdownNowOnDelegateExecutor() throws InterruptedException {
       final ExecutorService executorService = Executors.newSingleThreadExecutor();
@@ -100,9 +98,8 @@ public class OrderedExecutorSanityTest {
             }
          });
 
-
          for (int i = 0; i < 100; i++) {
-            executor.execute(() -> {numberOfTasks.incrementAndGet(); System.out.println("Dont worry, this will never happen");});
+            executor.execute(() ->  System.out.println("Dont worry, this will never happen"));
          }
 
          latch.countDown();
@@ -116,14 +113,14 @@ public class OrderedExecutorSanityTest {
       }
    }
 
-
    @Test
    public void testMeasure() throws InterruptedException {
       final ExecutorService executorService = Executors.newSingleThreadExecutor();
       try {
 
-         int x = 0xff;
-         final Runnable empty = () -> {};
+         final Runnable empty = () -> {
+         };
+
          final OrderedExecutor executor = new OrderedExecutor(executorService);
          int MAX_LOOP = 1_000_000;
 
@@ -132,11 +129,10 @@ public class OrderedExecutorSanityTest {
 
          for (int i = 0; i < runs; i++) {
             long start = System.nanoTime();
-            final CountDownLatch executed = new CountDownLatch(1);
+            final CountDownLatch executed = new CountDownLatch(MAX_LOOP);
             for (int l = 0; l < MAX_LOOP; l++) {
-               executor.execute(empty);
+               executor.execute(executed::countDown);
             }
-            executor.execute(executed::countDown);
             Assert.assertTrue(executed.await(1, TimeUnit.MINUTES));
             long end = System.nanoTime();
 

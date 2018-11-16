@@ -91,7 +91,6 @@
       <maven.assembly.plugin.version>2.4</maven.assembly.plugin.version>
       <mockito.version>2.8.47</mockito.version>
       <netty.version>4.1.28.Final</netty.version>
-      <jctools.version>2.0.2</jctools.version>
       <netty-tcnative-version>2.0.12.Final</netty-tcnative-version>
       <proton.version>0.30.0</proton.version>
       <resteasy.version>3.0.19.Final</resteasy.version>
@@ -782,12 +781,6 @@
             <artifactId>osgi.cmpn</artifactId>
             <version>6.0.0</version>
             <scope>provided</scope>
-            <!-- License: Apache 2.0 -->
-         </dependency>
-         <dependency>
-            <groupId>org.jctools</groupId>
-            <artifactId>jctools-core</artifactId>
-            <version>${jctools.version}</version>
             <!-- License: Apache 2.0 -->
          </dependency>
       </dependencies>
