@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.activemq.artemis.Closeable;
@@ -159,7 +160,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    private final SimpleString managementAddress;
 
-   protected final RoutingContext routingContext = new RoutingContextImpl(null);
+   protected final RoutingContext routingContext;
 
    protected final SessionCallback callback;
 
@@ -189,6 +190,8 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
    private Map<SimpleString, RoutingType> prefixes;
 
    private Set<Closeable> closeables;
+
+   private final Executor sessionExecutor;
 
    public ServerSessionImpl(final String name,
                             final String username,
@@ -264,6 +267,10 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       remotingConnection.addFailureListener(this);
       this.context = context;
 
+      this.sessionExecutor = server.getExecutorFactory().getExecutor();
+
+      this.routingContext = new RoutingContextImpl(null);
+
       if (!xa) {
          tx = newTransaction();
       }
@@ -281,6 +288,11 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          closeables = new HashSet<>();
       }
       this.closeables.add(closeable);
+   }
+
+   @Override
+   public Executor getSessionExecutor() {
+      return sessionExecutor;
    }
 
    @Override
@@ -1051,7 +1063,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
     */
    @Override
    public Transaction newTransaction() {
-      return new TransactionImpl(null, storageManager, timeoutSeconds);
+      return new TransactionImpl(null, storageManager, timeoutSeconds, sessionExecutor);
    }
 
    /**
@@ -1059,7 +1071,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
     * @return
     */
    private Transaction newTransaction(final Xid xid) {
-      return new TransactionImpl(xid, storageManager, timeoutSeconds);
+      return new TransactionImpl(xid, storageManager, timeoutSeconds, sessionExecutor);
    }
 
    @Override

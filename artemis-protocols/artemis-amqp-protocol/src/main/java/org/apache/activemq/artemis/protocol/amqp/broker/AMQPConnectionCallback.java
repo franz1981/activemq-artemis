@@ -33,6 +33,7 @@ import org.apache.activemq.artemis.core.remoting.CertificateUtil;
 import org.apache.activemq.artemis.core.remoting.CloseListener;
 import org.apache.activemq.artemis.core.remoting.FailureListener;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
+import org.apache.activemq.artemis.core.server.ServerSession;
 import org.apache.activemq.artemis.core.server.cluster.ClusterConnection;
 import org.apache.activemq.artemis.core.server.cluster.ClusterManager;
 import org.apache.activemq.artemis.core.transaction.Transaction;
@@ -92,6 +93,10 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
       this.closeExecutor = closeExecutor;
       this.server = server;
       saslMechanisms = manager.getSaslMechanisms();
+   }
+
+   public Connection getTransportConnection() {
+      return connection;
    }
 
    public String[] getSaslMechanisms() {
@@ -253,10 +258,10 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
       close();
    }
 
-   public Binary newTransaction() {
+   public Binary newTransaction(ServerSession serverSession) {
       XidImpl xid = newXID();
       Binary binary = new Binary(xid.getGlobalTransactionId());
-      Transaction transaction = new ProtonTransactionImpl(xid, server.getStorageManager(), -1);
+      Transaction transaction = new ProtonTransactionImpl(xid, server.getStorageManager(), -1, amqpConnection, serverSession.getSessionExecutor());
       transactions.put(binary, transaction);
       return binary;
    }

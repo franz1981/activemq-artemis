@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
@@ -57,6 +58,8 @@ public class TransactionImpl implements Transaction {
 
    private ActiveMQException exception;
 
+   private final Executor completionExecutor;
+
    private final Object timeoutLock = new Object();
 
    private final long createTime;
@@ -87,6 +90,20 @@ public class TransactionImpl implements Transaction {
       createTime = System.currentTimeMillis();
 
       this.timeoutSeconds = timeoutSeconds;
+
+      this.completionExecutor = null;
+   }
+
+   public TransactionImpl(final StorageManager storageManager, Executor executor) {
+      this.storageManager = storageManager;
+
+      xid = null;
+
+      id = storageManager.generateID();
+
+      createTime = System.currentTimeMillis();
+
+      this.completionExecutor = executor;
    }
 
    public TransactionImpl(final StorageManager storageManager) {
@@ -97,9 +114,11 @@ public class TransactionImpl implements Transaction {
       id = storageManager.generateID();
 
       createTime = System.currentTimeMillis();
+
+      this.completionExecutor = null;
    }
 
-   public TransactionImpl(final Xid xid, final StorageManager storageManager, final int timeoutSeconds) {
+   public TransactionImpl(final Xid xid, final StorageManager storageManager, final int timeoutSeconds, final Executor completionExecutor) {
       this.storageManager = storageManager;
 
       this.xid = xid;
@@ -109,6 +128,8 @@ public class TransactionImpl implements Transaction {
       createTime = System.currentTimeMillis();
 
       this.timeoutSeconds = timeoutSeconds;
+
+      this.completionExecutor = completionExecutor;
    }
 
    public TransactionImpl(final long id, final Xid xid, final StorageManager storageManager) {
@@ -119,6 +140,8 @@ public class TransactionImpl implements Transaction {
       this.id = id;
 
       createTime = System.currentTimeMillis();
+
+      this.completionExecutor = null;
    }
 
    // Transaction implementation
@@ -540,17 +563,34 @@ public class TransactionImpl implements Transaction {
       }
    }
 
-   private synchronized void afterCommit(List<TransactionOperation> oeprationsToComplete) {
-      if (oeprationsToComplete != null) {
-         for (TransactionOperation operation : oeprationsToComplete) {
+   private void afterCommit(List<TransactionOperation> operationsToComplete) {
+
+      if (completionExecutor == null) {
+         internalAfterCommit(operationsToComplete);
+      } else {
+         completionExecutor.execute(() -> internalAfterCommit(operationsToComplete));
+      }
+   }
+
+   private synchronized void internalAfterCommit(List<TransactionOperation> operationsToComplete) {
+      if (operationsToComplete != null) {
+         for (TransactionOperation operation : operationsToComplete) {
             operation.afterCommit(this);
          }
          // Help out GC here
-         oeprationsToComplete.clear();
+         operationsToComplete.clear();
       }
    }
 
    private synchronized void afterRollback(List<TransactionOperation> operationsToComplete) {
+      if (completionExecutor == null) {
+         internalAfterRollback(operationsToComplete);
+      } else {
+         completionExecutor.execute(() -> internalAfterRollback(operationsToComplete));
+      }
+   }
+
+   private synchronized void internalAfterRollback(List<TransactionOperation> operationsToComplete) {
       if (operationsToComplete != null) {
          for (TransactionOperation operation : operationsToComplete) {
             operation.afterRollback(this);

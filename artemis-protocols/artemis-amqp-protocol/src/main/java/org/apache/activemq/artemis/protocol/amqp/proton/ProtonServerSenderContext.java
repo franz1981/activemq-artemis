@@ -20,7 +20,8 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.api.core.ActiveMQSecurityException;
@@ -33,6 +34,7 @@ import org.apache.activemq.artemis.core.server.AddressQueryResult;
 import org.apache.activemq.artemis.core.server.Consumer;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.QueueQueryResult;
+import org.apache.activemq.artemis.core.server.impl.ServerConsumerImpl;
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPMessage;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPSessionCallback;
@@ -68,13 +70,12 @@ import org.apache.qpid.proton.amqp.transport.ReceiverSettleMode;
 import org.apache.qpid.proton.amqp.transport.SenderSettleMode;
 import org.apache.qpid.proton.codec.ReadableBuffer;
 import org.apache.qpid.proton.engine.Delivery;
-import org.apache.qpid.proton.engine.EndpointState;
 import org.apache.qpid.proton.engine.Link;
 import org.apache.qpid.proton.engine.Sender;
 import org.jboss.logging.Logger;
 
 /**
- * TODO: Merge {@link ProtonServerSenderContext} and {@link org.apache.activemq.artemis.protocol.amqp.client.ProtonClientSenderContext} once we support 'global' link names. The split is a workaround for outgoing links
+ * This is the Equivalent for the ServerConsumer
  */
 public class ProtonServerSenderContext extends ProtonInitializable implements ProtonDeliveryHandler {
 
@@ -104,6 +105,15 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    private boolean isVolatile = false;
    private boolean preSettle;
    private SimpleString tempQueueName;
+   private final AtomicBoolean draining = new AtomicBoolean(false);
+
+   private int credits = 0;
+
+   /**
+    * The model proton uses requires us to hold a lock in certain times
+    * to sync the credits we have versus the credits that are being held in proton
+    * */
+   private final Object creditsLock = new Object();
 
    public ProtonServerSenderContext(AMQPConnectionContext connection,
                                     Sender sender,
@@ -122,7 +132,50 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
 
    @Override
    public void onFlow(int currentCredits, boolean drain) {
-      sessionSPI.onFlowConsumer(brokerConsumer, currentCredits, drain);
+      connection.requireInHandler();
+
+      setupCredit();
+
+      ServerConsumerImpl serverConsumer = (ServerConsumerImpl) brokerConsumer;
+      if (drain) {
+         // If the draining is already running, then don't do anything
+         if (draining.compareAndSet(false, true)) {
+            final ProtonServerSenderContext plugSender = (ProtonServerSenderContext) serverConsumer.getProtocolContext();
+            serverConsumer.forceDelivery(1, new Runnable() {
+               @Override
+               public void run() {
+                  try {
+                     connection.runLater(() -> {
+                        plugSender.reportDrained();
+                        setupCredit();
+                     });
+                  } finally {
+                     draining.set(false);
+                  }
+               }
+            });
+         }
+      } else {
+         serverConsumer.promptDelivery();
+      }
+   }
+
+   public boolean hasCredits() {
+      if (!connection.flowControl(brokerConsumer::promptDelivery)) {
+         return false;
+      }
+      synchronized (creditsLock) {
+         return credits > 0;
+      }
+   }
+
+   private void setupCredit() {
+      synchronized (creditsLock) {
+         this.credits = sender.getCredit() - pending.get();
+         if (credits < 0) {
+            credits = 0;
+         }
+      }
    }
 
    public Sender getSender() {
@@ -469,20 +522,17 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
          sender.setCondition(condition);
       }
       protonSession.removeSender(sender);
-      connection.lock();
-      try {
-         sender.close();
-      } finally {
-         connection.unlock();
-      }
-      connection.flush();
 
-      try {
-         sessionSPI.closeSender(brokerConsumer);
-      } catch (Exception e) {
-         log.warn(e.getMessage(), e);
-         throw new ActiveMQAMQPInternalErrorException(e.getMessage());
-      }
+      connection.runLater(() -> {
+         sender.close();
+         try {
+            sessionSPI.closeSender(brokerConsumer);
+         } catch (Exception e) {
+            log.warn(e.getMessage(), e);
+         }
+         sender.close();
+         connection.flush();
+      });
    }
 
    /*
@@ -666,17 +716,15 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    }
 
    public void settle(Delivery delivery) {
-      connection.lock();
-      try {
-         delivery.settle();
-      } finally {
-         connection.unlock();
-      }
+      connection.requireInHandler();
+      delivery.settle();
    }
 
    public synchronized void checkState() {
       sessionSPI.resumeDelivery(brokerConsumer);
    }
+
+   public AtomicInteger pending = new AtomicInteger(0);
 
    /**
     * handle an out going message from ActiveMQ Artemis, send via the Proton Sender
@@ -693,59 +741,59 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       // we only need a tag if we are going to settle later
       byte[] tag = preSettle ? new byte[0] : protonSession.getTag();
 
-      // Let the Message decide how to present the message bytes
-      ReadableBuffer sendBuffer = message.getSendBuffer(deliveryCount);
-      boolean releaseRequired = sendBuffer instanceof NettyReadable;
-
       try {
-         int size = sendBuffer.remaining();
-
-         while (!connection.tryLock(1, TimeUnit.SECONDS)) {
-            if (closed || sender.getLocalState() == EndpointState.CLOSED) {
-               // If we're waiting on the connection lock, the link might be in the process of closing.  If this happens
-               // we return.
-               return 0;
-            } else {
-               if (log.isDebugEnabled()) {
-                  log.debug("Couldn't get lock on deliverMessage " + this);
-               }
-            }
+         synchronized (creditsLock) {
+            pending.incrementAndGet();
+            credits--;
          }
+         connection.runLater(() -> {
+            // Let the Message decide how to present the message bytes
+            ReadableBuffer sendBuffer = message.getSendBuffer(deliveryCount);
 
-         try {
+            boolean releaseRequired = sendBuffer instanceof NettyReadable;
             final Delivery delivery;
             delivery = sender.delivery(tag, 0, tag.length);
             delivery.setMessageFormat((int) message.getMessageFormat());
             delivery.setContext(messageReference);
 
-            if (releaseRequired) {
-               sender.send(sendBuffer);
-               // Above send copied, so release now if needed
-               releaseRequired = false;
-               ((NettyReadable) sendBuffer).getByteBuf().release();
-            } else {
-               // Don't have pooled content, no need to release or copy.
-               sender.sendNoCopy(sendBuffer);
+            try {
+
+               if (releaseRequired) {
+                  sender.send(sendBuffer);
+                  // Above send copied, so release now if needed
+                  releaseRequired = false;
+                  ((NettyReadable) sendBuffer).getByteBuf().release();
+               } else {
+                  // Don't have pooled content, no need to release or copy.
+                  sender.sendNoCopy(sendBuffer);
+               }
+
+               if (preSettle) {
+                  // Presettled means the client implicitly accepts any delivery we send it.
+                  try {
+                     sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
+                  } catch (Exception e) {
+
+                  }
+                  delivery.settle();
+               } else {
+                  sender.advance();
+               }
+
+               connection.flush();
+            } finally {
+               pending.decrementAndGet();
+               if (releaseRequired) {
+                  ((NettyReadable) sendBuffer).getByteBuf().release();
+               }
             }
 
-            if (preSettle) {
-               // Presettled means the client implicitly accepts any delivery we send it.
-               sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
-               delivery.settle();
-            } else {
-               sender.advance();
-            }
+         });
 
-            connection.flush();
-         } finally {
-            connection.unlock();
-         }
-
-         return size;
+         // This is because on AMQP we only send messages based in credits, not bytes
+         return 1;
       } finally {
-         if (releaseRequired) {
-            ((NettyReadable) sendBuffer).getByteBuf().release();
-         }
+
       }
    }
 
@@ -806,13 +854,8 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
     * Update link state to reflect that the previous drain attempt has completed.
     */
    public void reportDrained() {
-      connection.lock();
-      try {
-         sender.drained();
-      } finally {
-         connection.unlock();
-      }
-
+      connection.requireInHandler();
+      sender.drained();
       connection.flush();
    }
 }

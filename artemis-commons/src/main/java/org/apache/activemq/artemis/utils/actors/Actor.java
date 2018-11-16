@@ -29,8 +29,9 @@ public class Actor<T> extends ProcessorBase<T> {
    }
 
    @Override
-   protected final void doTask(T task) {
+   protected final boolean doTask(T task) {
       listener.onMessage(task);
+      return true;
    }
 
    public final void act(T message) {

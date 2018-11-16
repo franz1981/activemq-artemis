@@ -1341,7 +1341,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
 
             @Override
             public void done() {
-               addReferences(refs, direct);
+               context.processReferences(refs, direct);
             }
          });
       }
@@ -1476,16 +1476,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
       return true;
    }
 
-   /**
-    * @param refs
-    */
-   private void addReferences(final List<MessageReference> refs, final boolean direct) {
-      for (MessageReference ref : refs) {
-         ref.getQueue().addTail(ref, direct);
-      }
-   }
-
-   /**
+  /**
     * The expiry scanner can't be started until the whole server has been started other wise you may get races
     */
    @Override

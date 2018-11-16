@@ -49,6 +49,9 @@ import org.apache.qpid.proton.engine.Delivery;
 import org.apache.qpid.proton.engine.Receiver;
 import org.jboss.logging.Logger;
 
+/**
+ * This is the equivalent for the ServerProducer
+ */
 public class ProtonServerReceiverContext extends ProtonInitializable implements ProtonDeliveryHandler {
 
    private static final Logger log = Logger.getLogger(ProtonServerReceiverContext.class);
@@ -63,34 +66,36 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
 
    protected final AMQPSessionCallback sessionSPI;
 
-   /** We create this AtomicRunnable with setRan.
-    *  This is because we always reuse the same instance.
-    *  In case the creditRunnable was run, we reset and send it over.
-    *  We set it as ran as the first one should always go through */
+   /**
+    * We create this AtomicRunnable with setRan.
+    * This is because we always reuse the same instance.
+    * In case the creditRunnable was run, we reset and send it over.
+    * We set it as ran as the first one should always go through
+    */
    protected final AtomicRunnable creditRunnable;
 
-
-   /** This Credit Runnable may be used in Mock tests to simulate the credit semantic here */
-   public static AtomicRunnable createCreditRunnable(int refill, int threshold, Receiver receiver, AMQPConnectionContext connection) {
+   /**
+    * This Credit Runnable may be used in Mock tests to simulate the credit semantic here
+    */
+   public static AtomicRunnable createCreditRunnable(int refill,
+                                                     int threshold,
+                                                     Receiver receiver,
+                                                     AMQPConnectionContext connection) {
+      Runnable creditRunnable = () -> {
+         if (receiver.getCredit() <= threshold) {
+            int topUp = refill - receiver.getCredit();
+            if (topUp > 0) {
+               receiver.flow(topUp);
+            }
+         }
+      };
       return new AtomicRunnable() {
          @Override
          public void atomicRun() {
-            connection.lock();
-            try {
-               if (receiver.getCredit() <= threshold) {
-                  int topUp = refill - receiver.getCredit();
-                  if (topUp > 0) {
-                     receiver.flow(topUp);
-                  }
-               }
-            } finally {
-               connection.unlock();
-            }
-            connection.flush();
+            connection.runLater(creditRunnable);
          }
       };
    }
-
 
    /*
     The maximum number of credits we will allocate to clients.
@@ -250,6 +255,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
    @Override
    public void onMessage(Delivery delivery) throws ActiveMQAMQPException {
       try {
+         connection.requireInHandler();
          Receiver receiver = ((Receiver) delivery.getLink());
 
          if (receiver.current() != delivery) {
@@ -339,13 +345,10 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
    }
 
    public void drain(int credits) {
-      connection.lock();
-      try {
+      connection.runNow(() -> {
          receiver.drain(credits);
-      } finally {
-         connection.unlock();
-      }
-      connection.flush();
+         connection.flush();
+      });
    }
 
    public int drained() {

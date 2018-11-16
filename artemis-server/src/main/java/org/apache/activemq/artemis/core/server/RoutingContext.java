@@ -55,4 +55,9 @@ public interface RoutingContext {
    SimpleString getAddress(Message message);
 
    RoutingType getRoutingType();
+
+   void processReferences(List<MessageReference> refs, boolean direct);
+
+
+
 }

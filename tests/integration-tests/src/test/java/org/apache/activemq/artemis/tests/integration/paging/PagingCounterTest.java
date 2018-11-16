@@ -291,7 +291,7 @@ public class PagingCounterTest extends ActiveMQTestBase {
 
       StorageManager storage = server.getStorageManager();
 
-      Transaction tx = new TransactionImpl(xid, server.getStorageManager(), 300);
+      Transaction tx = new TransactionImpl(xid, server.getStorageManager(), 300, null);
 
       for (int i = 0; i < 2000; i++) {
          counter.increment(tx, 1, 1000);

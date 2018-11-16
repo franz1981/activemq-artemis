@@ -68,7 +68,7 @@ public class TransactionImplTest extends ActiveMQTestBase {
 
    @Test
    public void testTimeoutAndThenCommitWithARollback() throws Exception {
-      TransactionImpl tx = new TransactionImpl(newXID(), new FakeSM(), 10);
+      TransactionImpl tx = new TransactionImpl(newXID(), new FakeSM(), 10, null);
       Assert.assertTrue(tx.hasTimedOut(System.currentTimeMillis() + 60000, 10));
 
       final AtomicInteger commit = new AtomicInteger(0);
@@ -136,7 +136,7 @@ public class TransactionImplTest extends ActiveMQTestBase {
 
    @Test
    public void testTimeoutThenRollbackWithRollback() throws Exception {
-      TransactionImpl tx = new TransactionImpl(newXID(), new FakeSM(), 10);
+      TransactionImpl tx = new TransactionImpl(newXID(), new FakeSM(), 10, null);
       Assert.assertTrue(tx.hasTimedOut(System.currentTimeMillis() + 60000, 10));
 
       final AtomicInteger commit = new AtomicInteger(0);

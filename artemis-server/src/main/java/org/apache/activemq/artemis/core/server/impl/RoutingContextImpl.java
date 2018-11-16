@@ -20,9 +20,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.Queue;
 import org.apache.activemq.artemis.core.server.RouteContextList;
 import org.apache.activemq.artemis.core.server.RoutingContext;
@@ -42,8 +44,15 @@ public final class RoutingContextImpl implements RoutingContext {
 
    private RoutingType routingType;
 
+   private final Executor executor;
+
    public RoutingContextImpl(final Transaction transaction) {
+      this(transaction, null);
+   }
+
+   public RoutingContextImpl(final Transaction transaction, Executor executor) {
       this.transaction = transaction;
+      this.executor = executor;
    }
 
    @Override
@@ -68,6 +77,18 @@ public final class RoutingContextImpl implements RoutingContext {
 
       queueCount++;
    }
+
+   @Override
+   public void processReferences(final List<MessageReference> refs, final boolean direct) {
+      internalprocessReferences(refs, direct);
+   }
+
+   private void internalprocessReferences(final List<MessageReference> refs, final boolean direct) {
+      for (MessageReference ref : refs) {
+         ref.getQueue().addTail(ref, direct);
+      }
+   }
+
 
    @Override
    public void addQueueWithAck(SimpleString address, Queue queue) {
