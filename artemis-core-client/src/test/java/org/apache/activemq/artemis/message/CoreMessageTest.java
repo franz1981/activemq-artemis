@@ -24,6 +24,7 @@ import io.netty.buffer.Unpooled;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.Message;
+import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.client.impl.ClientMessageImpl;
 import org.apache.activemq.artemis.core.message.impl.CoreMessage;
@@ -90,17 +91,30 @@ public class CoreMessageTest {
       Assert.assertEquals(bodyBufferSize, readonlyBodyBufferReadableBytes);
    }
 
+   @Test
+   public void sendThroughPacketsTo() {
+      CoreMessage decodedMessage = decodeMessage();
+      decodedMessage.setRoutingType(RoutingType.ANYCAST);
+      int encodeSize = decodedMessage.getEncodeSize();
+      final ByteBuf sendBuffer = Unpooled.buffer(encodeSize);
+      decodedMessage.sendBuffer(sendBuffer, 0);
+      final CoreMessage sent = new CoreMessage();
+      sent.receiveBuffer(sendBuffer);
+
+      Assert.assertEquals(encodeSize, sent.getEncodeSize());
+
+      Assert.assertEquals(decodedMessage.getRoutingType(), sent.getRoutingType());
+      Assert.assertEquals(TEXT, TextMessageUtil.readBodyText(sent.getReadOnlyBodyBuffer()).toString());
+   }
+
    /** The message is received, then sent to the other side untouched */
    @Test
    public void sendThroughPackets() {
       CoreMessage decodedMessage = decodeMessage();
-
+      decodedMessage.setRoutingType(RoutingType.ANYCAST);
       int encodeSize = decodedMessage.getEncodeSize();
-      Assert.assertEquals(BYTE_ENCODE.capacity(), encodeSize);
-
       SessionSendMessage sendMessage = new SessionSendMessage(decodedMessage, true, null);
       sendMessage.setChannelID(777);
-
       ActiveMQBuffer buffer = sendMessage.encode(null);
 
       byte[] byteArray = buffer.byteBuf().array();
@@ -115,7 +129,7 @@ public class CoreMessageTest {
       Assert.assertEquals(encodeSize, sendMessageReceivedSent.getMessage().getEncodeSize());
 
       Assert.assertTrue(sendMessageReceivedSent.isRequiresResponse());
-
+      Assert.assertEquals(decodedMessage.getRoutingType(), sendMessageReceivedSent.getMessage().getRoutingType());
       Assert.assertEquals(TEXT, TextMessageUtil.readBodyText(sendMessageReceivedSent.getMessage().getReadOnlyBodyBuffer()).toString());
    }
 

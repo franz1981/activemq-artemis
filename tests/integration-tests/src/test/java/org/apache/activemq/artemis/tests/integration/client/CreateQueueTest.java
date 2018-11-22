@@ -19,15 +19,28 @@ package org.apache.activemq.artemis.tests.integration.client;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 
+import io.aeron.Aeron;
+import io.aeron.ExclusivePublication;
+import io.aeron.Subscription;
+import io.aeron.driver.MediaDriver;
+import io.aeron.driver.ThreadingMode;
+import io.aeron.logbuffer.Header;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import org.agrona.DirectBuffer;
+import org.agrona.concurrent.UnsafeBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
+import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.api.core.client.ServerLocator;
+import org.apache.activemq.artemis.core.message.impl.CoreMessage;
+import org.apache.activemq.artemis.core.postoffice.impl.AeronConnector;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
-import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
 import org.apache.activemq.artemis.tests.util.ActiveMQTestBase;
 import org.junit.Before;
@@ -55,6 +68,96 @@ public class CreateQueueTest extends ActiveMQTestBase {
 
       server.start();
       cf = createSessionFactory(locator);
+   }
+
+   @Test
+   public void sendReceiveWithAeron() throws InterruptedException {
+      final boolean IPC = false;
+      final int tests = 10;
+      final int messages = 1_000_000;
+      final MediaDriver.Context context = new MediaDriver.Context();
+      MediaDriver mediaDriver = null;
+      if (!IPC) {
+         context.aeronDirectoryName("/dev/shm/client");
+         context.threadingMode(ThreadingMode.SHARED);
+         mediaDriver = MediaDriver.launchEmbedded(context);
+      } else {
+         context.aeronDirectoryName(AeronConnector.EMBEDDED_DIR_NAME);
+      }
+      try {
+         final Aeron.Context ctx = new Aeron.Context();
+         //use the temps dir of my machine
+         ctx.aeronDirectoryName(context.aeronDirectoryName());
+         try (Aeron aeron = Aeron.connect(ctx)) {
+            final ExclusivePublication publication = aeron.addExclusivePublication(AeronConnector.INCOMING_CHANNEL, AeronConnector.INCOMING_STREAM_ID);
+            final Subscription subscription = aeron.addSubscription(AeronConnector.OUTGOING_CHANNEL, AeronConnector.OUTGOING_STREAM_ID);
+            final CountDownLatch startedConsumer = new CountDownLatch(1);
+            final CountDownLatch[] finishedTests = new CountDownLatch[tests];
+            for (int t = 0; t < tests; t++) {
+               finishedTests[t] = new CountDownLatch(1);
+            }
+            final Thread consumerThreads = new Thread(() -> {
+               startedConsumer.countDown();
+               for (int t = 0; t < tests; t++) {
+                  int remaining = messages;
+                  while (remaining > 0) {
+                     int polled = subscription.poll(CreateQueueTest::onFragmentReceived, remaining);
+                     if (polled <= 0) {
+                        Thread.yield();
+                     } else {
+                        remaining -= polled;
+                     }
+                  }
+                  finishedTests[t].countDown();
+               }
+            });
+            final ByteBuf sentBuffer = Unpooled.buffer(1024);
+            final UnsafeBuffer sentMessageBuffer = new UnsafeBuffer();
+            final int msgSize = 100;
+            final byte[] bytes = new byte[msgSize];
+            consumerThreads.start();
+            startedConsumer.await();
+            long msgId = 1;
+            for (int t = 0; t < tests; t++) {
+               final long start = System.nanoTime();
+               for (int m = 0; m < messages; m++) {
+                  final CoreMessage msg = new CoreMessage();
+                  msg.initBuffer(msgSize);
+                  msg.setMessageID(msgId);
+                  msgId++;
+                  msg.setDurable(false);
+                  msg.setRoutingType(RoutingType.ANYCAST);
+                  msg.setAddress("aeron.queue");
+                  msg.putBytesProperty("bytes", bytes);
+                  final int encodeSize = msg.getEncodeSize();
+                  sentBuffer.clear().ensureWritable(encodeSize);
+                  msg.sendBuffer(sentBuffer, encodeSize);
+                  sentMessageBuffer.wrap(sentBuffer.array(), sentBuffer.arrayOffset(), encodeSize);
+                  try {
+                     while (publication.offer(sentMessageBuffer) < 0) {
+                        Thread.yield();
+                     }
+                  } finally {
+                     sentMessageBuffer.wrap(0, 0);
+                  }
+               }
+               finishedTests[t].await();
+               final long elapsed = System.nanoTime() - start;
+               System.out.println(messages * 1000_000_000L / elapsed + " msg/sec");
+               Thread.sleep(1000);
+            }
+         }
+      } catch (Throwable t) {
+         t.printStackTrace();
+      } finally {
+         if (mediaDriver != null) {
+            mediaDriver.close();
+         }
+      }
+   }
+
+   private static void onFragmentReceived(DirectBuffer buffer, int offset, int length, Header header) {
+
    }
 
    @Test

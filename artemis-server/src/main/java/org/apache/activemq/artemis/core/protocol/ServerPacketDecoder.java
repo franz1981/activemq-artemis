@@ -89,9 +89,9 @@ public class ServerPacketDecoder extends ClientPacketDecoder {
    private SessionSendMessage decodeSessionSendMessage(final ActiveMQBuffer in, CoreRemotingConnection connection) {
       final SessionSendMessage sendMessage;
 
-      if (connection.isVersionBeforeAddressChange()) {
+      if (connection != null && connection.isVersionBeforeAddressChange()) {
          sendMessage = new SessionSendMessage_1X(new CoreMessage(this.coreMessageObjectPools));
-      } else if (connection.isVersionBeforeAsyncResponseChange()) {
+      } else if (connection != null && connection.isVersionBeforeAsyncResponseChange()) {
          sendMessage = new SessionSendMessage(new CoreMessage(this.coreMessageObjectPools));
       } else {
          sendMessage = new SessionSendMessage_V2(new CoreMessage(this.coreMessageObjectPools));

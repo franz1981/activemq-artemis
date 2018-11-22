@@ -101,6 +101,7 @@ import org.apache.activemq.artemis.core.postoffice.BindingType;
 import org.apache.activemq.artemis.core.postoffice.Bindings;
 import org.apache.activemq.artemis.core.postoffice.PostOffice;
 import org.apache.activemq.artemis.core.postoffice.QueueBinding;
+import org.apache.activemq.artemis.core.postoffice.impl.AeronConnector;
 import org.apache.activemq.artemis.core.postoffice.impl.DivertBinding;
 import org.apache.activemq.artemis.core.postoffice.impl.LocalQueueBinding;
 import org.apache.activemq.artemis.core.postoffice.impl.PostOfficeImpl;
@@ -246,6 +247,8 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    private volatile PagingManager pagingManager;
 
    private volatile PostOffice postOffice;
+
+   private volatile AeronConnector lowLatencyConnector;
 
    private volatile ExecutorService threadPool;
 
@@ -829,6 +832,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    public void stop(boolean isShutdown)  throws Exception {
       try {
          stop(false, isShutdown);
+         lowLatencyConnector.close();
       } finally {
          if (isShutdown) networkHealthCheck.stop();
       }
@@ -2607,6 +2611,10 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
       resourceManager = new ResourceManagerImpl((int) (configuration.getTransactionTimeout() / 1000), configuration.getTransactionTimeoutScanPeriod(), scheduledPool);
       postOffice = new PostOfficeImpl(this, storageManager, pagingManager, queueFactory, managementService, configuration.getMessageExpiryScanPeriod(), configuration.getAddressQueueScanPeriod(), configuration.getWildcardConfiguration(), configuration.getIDCacheSize(), configuration.isPersistIDCache(), addressSettingsRepository);
+
+      lowLatencyConnector = new AeronConnector(this);
+
+      lowLatencyConnector.start();
 
       // This can't be created until node id is set
       clusterManager = new ClusterManager(executorFactory, this, postOffice, scheduledPool, managementService, configuration, nodeManager, haPolicy.isBackup());

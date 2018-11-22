@@ -33,6 +33,10 @@
 
    <dependencies>
       <dependency>
+         <groupId>io.aeron</groupId>
+         <artifactId>aeron-all</artifactId>
+      </dependency>
+      <dependency>
          <groupId>org.jboss.logging</groupId>
          <artifactId>jboss-logging-processor</artifactId>
          <scope>provided</scope>

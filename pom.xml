@@ -245,6 +245,11 @@
 
    <dependencyManagement>
       <dependencies>
+         <dependency>
+            <groupId>io.aeron</groupId>
+            <artifactId>aeron-all</artifactId>
+            <version>1.11.3</version>
+         </dependency>
          <!-- ## Test Dependencies ## Note: Junit is required in certain module tests.  We should control versions from here. -->
          <dependency>
             <groupId>junit</groupId>
