@@ -25,7 +25,6 @@ import java.util.concurrent.TimeUnit;
 import io.aeron.Aeron;
 import io.aeron.CommonContext;
 import io.aeron.ExclusivePublication;
-import io.aeron.Publication;
 import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
@@ -35,29 +34,30 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
-import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.filter.Filter;
 import org.apache.activemq.artemis.core.message.impl.CoreMessage;
+import org.apache.activemq.artemis.core.postoffice.PostOffice;
+import org.apache.activemq.artemis.core.postoffice.RoutingStatus;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.Consumer;
 import org.apache.activemq.artemis.core.server.HandleStatus;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.Queue;
-import org.apache.activemq.artemis.core.server.impl.MessageReferenceImpl;
 
 public final class AeronConnector implements AutoCloseable {
 
    public static final String EMBEDDED_DIR_NAME = "/dev/shm/broker";
-   public static final String INCOMING_CHANNEL = "aeron:udp?endpoint=localhost:40123";//CommonContext.IPC_CHANNEL
-   public static final String OUTGOING_CHANNEL = "aeron:udp?endpoint=localhost:40124";//CommonContext.IPC_CHANNEL;
+   //public static final String INCOMING_CHANNEL = "aeron:udp?endpoint=localhost:40123";
+   public static final String INCOMING_CHANNEL = CommonContext.IPC_CHANNEL;
+   //public static final String OUTGOING_CHANNEL = "aeron:udp?endpoint=localhost:40124";
+   public static final String OUTGOING_CHANNEL = CommonContext.IPC_CHANNEL;
    public static final int INCOMING_STREAM_ID = 1;
    public static final int OUTGOING_STREAM_ID = 2;
    private final MediaDriver mediaDriver;
    private final Aeron aeron;
    private final Subscription incomingMessages;
-   private Queue queue;
    private final Thread dedicatedPollerOfIncomingMessages;
    private volatile boolean stop;
    private final CountDownLatch stopped;
@@ -73,7 +73,6 @@ public final class AeronConnector implements AutoCloseable {
       //use the temps dir of my machine
       ctx.aeronDirectoryName(mediaDriver.aeronDirectoryName());
       aeron = Aeron.connect(ctx);
-      queue = null;
       //it is unicast: it allows just a single sender and receiver
       //to have multiple senders on the same (single) receiver you would need
       //multicast
@@ -82,7 +81,7 @@ public final class AeronConnector implements AutoCloseable {
       dedicatedPollerOfIncomingMessages = new Thread(() -> {
          final FragmentHandler fragmentHandler = this::onFragment;
          while (!stop) {
-            if(incomingMessages.poll(fragmentHandler, Integer.MAX_VALUE)==0){
+            if (incomingMessages.poll(fragmentHandler, Integer.MAX_VALUE) == 0) {
                Thread.yield();
             }
          }
@@ -96,7 +95,7 @@ public final class AeronConnector implements AutoCloseable {
    private void onFragment(DirectBuffer buffer, int offset, int length, Header header) {
       final ByteBuf unpooledBytes = Unpooled.buffer(length, length);
       unpooledBytes.ensureWritable(length);
-      buffer.getBytes(offset, unpooledBytes.array(),0, length);
+      buffer.getBytes(offset, unpooledBytes.array(), 0, length);
       unpooledBytes.writerIndex(length);
       try {
          final CoreMessage arrivedMessage = new CoreMessage();
@@ -104,10 +103,11 @@ public final class AeronConnector implements AutoCloseable {
          final SimpleString address = arrivedMessage.getAddressSimpleString();
          if (address != null) {
             try {
-               if (queue == null) {
-                  queue = createQueueAndConsumer(address, arrivedMessage);
+               final PostOffice postOffice = activeMQServer.getPostOffice();
+               if (postOffice.route(arrivedMessage, true) != RoutingStatus.OK) {
+                  createQueueAndConsumer(address, arrivedMessage);
+                  postOffice.route(arrivedMessage, true);
                }
-               queue.addTail(new MessageReferenceImpl(arrivedMessage, queue), true);
             } catch (Throwable t) {
                t.printStackTrace();
             }
@@ -119,7 +119,7 @@ public final class AeronConnector implements AutoCloseable {
       }
    }
 
-   private Queue createQueueAndConsumer(SimpleString address, CoreMessage arrivedMessage) throws Exception {
+   private void createQueueAndConsumer(SimpleString address, CoreMessage arrivedMessage) throws Exception {
       Queue queue = activeMQServer.createQueue(address, arrivedMessage.getRoutingType(), address, null, false, false);
       queue.addConsumer(new Consumer() {
 
@@ -135,13 +135,15 @@ public final class AeronConnector implements AutoCloseable {
             final Message message = reference.getMessage();
             final int encodeSize = message.getEncodeSize();
             sentBuffer.clear().ensureWritable(encodeSize);
-            message.sendBuffer(sentBuffer,1);
+            message.sendBuffer(sentBuffer, 1);
             sentBuffer.writerIndex(encodeSize);
             outGoingMessage.wrap(sentBuffer.array());
             try {
                while (outgoingMessages.offer(outGoingMessage, 0, encodeSize) < 0) {
                   Thread.yield();
                }
+               //acknowledge a message only when it has been offered to the aeron media (not 100% guarantee delivering)
+               reference.acknowledge();
             } finally {
                outGoingMessage.wrap(0, 0);
             }
@@ -177,7 +179,6 @@ public final class AeronConnector implements AutoCloseable {
             return 0;
          }
       });
-      return queue;
    }
 
    public void start() {

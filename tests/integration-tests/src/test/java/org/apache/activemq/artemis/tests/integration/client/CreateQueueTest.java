@@ -29,6 +29,7 @@ import io.aeron.driver.ThreadingMode;
 import io.aeron.logbuffer.Header;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.buffer.UnpooledUnsafeDirectByteBuf;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -72,9 +73,9 @@ public class CreateQueueTest extends ActiveMQTestBase {
 
    @Test
    public void sendReceiveWithAeron() throws InterruptedException {
-      final boolean IPC = false;
-      final int tests = 10;
-      final int messages = 1_000_000;
+      final boolean IPC = true;
+      final int tests = 20;
+      final int messages = 500_000;
       final MediaDriver.Context context = new MediaDriver.Context();
       MediaDriver mediaDriver = null;
       if (!IPC) {
@@ -122,7 +123,8 @@ public class CreateQueueTest extends ActiveMQTestBase {
                final long start = System.nanoTime();
                for (int m = 0; m < messages; m++) {
                   final CoreMessage msg = new CoreMessage();
-                  msg.initBuffer(msgSize);
+                  sentBuffer.clear();
+                  msg.setBuffer(sentBuffer);
                   msg.setMessageID(msgId);
                   msgId++;
                   msg.setDurable(false);
@@ -130,8 +132,6 @@ public class CreateQueueTest extends ActiveMQTestBase {
                   msg.setAddress("aeron.queue");
                   msg.putBytesProperty("bytes", bytes);
                   final int encodeSize = msg.getEncodeSize();
-                  sentBuffer.clear().ensureWritable(encodeSize);
-                  msg.sendBuffer(sentBuffer, encodeSize);
                   sentMessageBuffer.wrap(sentBuffer.array(), sentBuffer.arrayOffset(), encodeSize);
                   try {
                      while (publication.offer(sentMessageBuffer) < 0) {
