@@ -189,7 +189,6 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       sessionSPI.start();
       // protonSession.getServerSession().start();
 
-      // todo add flow control
       try {
          // to do whatever you need to make the broker start sending messages to the consumer
          // this could be null if a link reattach has happened

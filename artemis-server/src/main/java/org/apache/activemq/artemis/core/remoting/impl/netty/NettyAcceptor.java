@@ -77,7 +77,6 @@ import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.core.management.CoreNotificationType;
-import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryImpl;
 import org.apache.activemq.artemis.core.protocol.ProtocolHandler;
 import org.apache.activemq.artemis.core.remoting.impl.AbstractAcceptor;
 import org.apache.activemq.artemis.core.remoting.impl.ssl.SSLSupport;
@@ -350,7 +349,7 @@ public class NettyAcceptor extends AbstractAcceptor {
             eventLoopGroup = new EpollEventLoopGroup(remotingThreads, AccessController.doPrivileged(new PrivilegedAction<ActiveMQThreadFactory>() {
                @Override
                public ActiveMQThreadFactory run() {
-                  return new ActiveMQThreadFactory("activemq-netty-threads", true, ClientSessionFactoryImpl.class.getClassLoader());
+                  return new ActiveMQThreadFactory("activemq-netty-threads", true, NettyAcceptor.class.getClassLoader());
                }
             }));
             acceptorType = EPOLL_ACCEPTOR_TYPE;
@@ -361,7 +360,7 @@ public class NettyAcceptor extends AbstractAcceptor {
             eventLoopGroup = new KQueueEventLoopGroup(remotingThreads, AccessController.doPrivileged(new PrivilegedAction<ActiveMQThreadFactory>() {
                @Override
                public ActiveMQThreadFactory run() {
-                  return new ActiveMQThreadFactory("activemq-netty-threads", true, ClientSessionFactoryImpl.class.getClassLoader());
+                  return new ActiveMQThreadFactory("activemq-netty-threads", true, NettyAcceptor.class.getClassLoader());
                }
             }));
             acceptorType = KQUEUE_ACCEPTOR_TYPE;
@@ -372,7 +371,7 @@ public class NettyAcceptor extends AbstractAcceptor {
             eventLoopGroup = new NioEventLoopGroup(remotingThreads, AccessController.doPrivileged(new PrivilegedAction<ActiveMQThreadFactory>() {
                @Override
                public ActiveMQThreadFactory run() {
-                  return new ActiveMQThreadFactory("activemq-netty-threads", true, ClientSessionFactoryImpl.class.getClassLoader());
+                  return new ActiveMQThreadFactory("activemq-netty-threads", true, NettyAcceptor.class.getClassLoader());
                }
             }));
             acceptorType = NIO_ACCEPTOR_TYPE;

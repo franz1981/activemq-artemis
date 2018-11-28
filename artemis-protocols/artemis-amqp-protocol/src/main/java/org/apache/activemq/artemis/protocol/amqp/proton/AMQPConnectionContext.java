@@ -73,6 +73,8 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    protected final ProtonHandler handler;
 
+   private volatile boolean batch = true;
+
    protected AMQPConnectionCallback connectionCallback;
    private final String containerId;
    private final boolean isIncomingConnection;
@@ -135,6 +137,11 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
       if (!isIncomingConnection && saslClientFactory != null) {
          handler.createClientSASL();
       }
+   }
+
+   public AMQPConnectionContext noBatch() {
+      batch = false;
+      return this;
    }
 
    public void requireInHandler() {
@@ -321,6 +328,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onAuthInit(ProtonHandler handler, Connection connection, boolean sasl) {
+      noBatch();
       if (sasl) {
          // configured mech in decreasing order of preference
          String[] mechanisms = connectionCallback.getSaslMechanisms();
@@ -339,11 +347,13 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onSaslRemoteMechanismChosen(ProtonHandler handler, String mech) {
+      noBatch();
       handler.setChosenMechanism(connectionCallback.getServerSASL(mech));
    }
 
    @Override
    public void onSaslMechanismsOffered(final ProtonHandler handler, final String[] mechanisms) {
+      noBatch();
       if (saslClientFactory != null) {
          handler.setClientMechanism(saslClientFactory.chooseMechanism(mechanisms));
       }
@@ -351,12 +361,14 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onAuthFailed(final ProtonHandler protonHandler, final Connection connection) {
+      noBatch();
       connectionCallback.close();
       handler.close(null, this);
    }
 
    @Override
    public void onAuthSuccess(final ProtonHandler protonHandler, final Connection connection) {
+      noBatch();
       connection.open();
    }
 
@@ -367,7 +379,8 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void pushBytes(ByteBuf bytes) {
-      connectionCallback.onTransport(bytes, this);
+      connectionCallback.onTransport(bytes, this, batch);
+      batch = true;
    }
 
    @Override
@@ -377,6 +390,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteOpen(Connection connection) throws Exception {
+      noBatch();
       handler.requireHandler();
       try {
          initInternal();
@@ -417,6 +431,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
       @Override
       public void run() {
          try {
+            AMQPConnectionContext.this.noBatch();
             Long rescheduleAt = handler.tick(false);
             if (rescheduleAt == null) {
                // this mean tick could not acquire a lock, we will just retry in 10 milliseconds.
@@ -445,6 +460,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteClose(Connection connection) {
+      noBatch();
       handler.requireHandler();
       connection.close();
       connection.free();
@@ -461,11 +477,13 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onLocalOpen(Session session) throws Exception {
+      noBatch();
       getSessionExtension(session);
    }
 
    @Override
    public void onRemoteOpen(Session session) throws Exception {
+      noBatch();
       handler.requireHandler();
       getSessionExtension(session).initialise();
       session.open();
@@ -473,6 +491,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteClose(Session session) throws Exception {
+      noBatch();
       handler.requireHandler();
       session.close();
       session.free();
@@ -487,11 +506,13 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteOpen(Link link) throws Exception {
+      noBatch();
       remoteLinkOpened(link);
    }
 
    @Override
    public void onFlow(Link link) throws Exception {
+      noBatch();
       if (link.getContext() != null) {
          ((ProtonDeliveryHandler) link.getContext()).onFlow(link.getCredit(), link.getDrain());
       }
@@ -499,6 +520,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteClose(Link link) throws Exception {
+      noBatch();
       handler.requireHandler();
       link.close();
       link.free();
@@ -511,6 +533,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onRemoteDetach(Link link) throws Exception {
+      noBatch();
       handler.requireHandler();
       boolean handleAsClose = link.getSource() != null && ((Source) link.getSource()).getExpiryPolicy() == TerminusExpiryPolicy.LINK_DETACH;
 
@@ -524,6 +547,7 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onLocalDetach(Link link) throws Exception {
+      noBatch();
       handler.requireHandler();
       Object context = link.getContext();
       if (context instanceof ProtonServerSenderContext) {

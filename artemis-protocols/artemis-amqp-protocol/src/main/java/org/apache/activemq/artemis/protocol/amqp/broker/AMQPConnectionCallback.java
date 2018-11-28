@@ -208,8 +208,8 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
       this.protonConnectionDelegate = protonConnectionDelegate;
    }
 
-   public void onTransport(ByteBuf byteBuf, AMQPConnectionContext amqpConnection) {
-      connection.write(new ChannelBufferWrapper(byteBuf, true));
+   public void onTransport(ByteBuf byteBuf, AMQPConnectionContext amqpConnection, boolean batch) {
+      connection.write(new ChannelBufferWrapper(byteBuf, true), false, batch);
    }
 
    public boolean isWritable(ReadyListener readyListener) {
