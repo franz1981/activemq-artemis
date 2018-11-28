@@ -86,6 +86,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
             int topUp = refill - receiver.getCredit();
             if (topUp > 0) {
                receiver.flow(topUp);
+               connection.flush();
             }
          }
       };
