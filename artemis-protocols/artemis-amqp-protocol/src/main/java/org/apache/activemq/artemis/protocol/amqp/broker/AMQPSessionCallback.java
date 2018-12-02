@@ -150,6 +150,10 @@ public class AMQPSessionCallback implements SessionCallback {
 
    }
 
+   public Executor getSessionExecutor() {
+      return sessionExecutor;
+   }
+
    @Override
    public boolean supportsDirectDelivery() {
       return manager.isAmqpDirectDelivery();
@@ -261,9 +265,7 @@ public class AMQPSessionCallback implements SessionCallback {
       }
    }
 
-   public QueueQueryResult queueQuery(SimpleString queueName,
-                                      RoutingType routingType,
-                                      boolean autoCreate) throws Exception {
+   public QueueQueryResult queueQuery(SimpleString queueName, RoutingType routingType, boolean autoCreate) throws Exception {
       QueueQueryResult queueQueryResult = serverSession.executeQueueQuery(queueName);
 
       if (!queueQueryResult.isExists() && queueQueryResult.isAutoCreateQueues() && autoCreate) {
@@ -450,7 +452,7 @@ public class AMQPSessionCallback implements SessionCallback {
                rejectMessage(delivery, AmqpError.RESOURCE_LIMIT_EXCEEDED, "Address is full: " + address);
             }
          } else {
-            serverSend(transaction, message, delivery, receiver);
+            serverSend(context, transaction, message, delivery, receiver);
          }
       } finally {
          resetContext(oldcontext);
@@ -482,7 +484,8 @@ public class AMQPSessionCallback implements SessionCallback {
 
    }
 
-   private void serverSend(final Transaction transaction,
+   private void serverSend(final ProtonServerReceiverContext context,
+                           final Transaction transaction,
                            final Message message,
                            final Delivery delivery,
                            final Receiver receiver) throws Exception {
@@ -504,6 +507,7 @@ public class AMQPSessionCallback implements SessionCallback {
                   delivery.disposition(Accepted.getInstance());
                }
                delivery.settle();
+               context.flow();
                connection.flush();
             });
          }
@@ -608,7 +612,7 @@ public class AMQPSessionCallback implements SessionCallback {
    @Override
    public void disconnect(ServerConsumer consumer, SimpleString queueName) {
       ErrorCondition ec = new ErrorCondition(AmqpSupport.RESOURCE_DELETED, "Queue was deleted: " + queueName);
-      connection.runLater(() -> {
+      connection.runNow(() -> {
          try {
             ((ProtonServerSenderContext) consumer.getProtocolContext()).close(ec);
             connection.flush();

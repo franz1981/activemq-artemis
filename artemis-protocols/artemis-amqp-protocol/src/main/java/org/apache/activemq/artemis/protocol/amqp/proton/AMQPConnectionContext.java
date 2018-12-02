@@ -22,6 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -34,7 +35,9 @@ import org.apache.activemq.artemis.protocol.amqp.broker.AMQPSessionCallback;
 import org.apache.activemq.artemis.protocol.amqp.broker.ProtonProtocolManager;
 import org.apache.activemq.artemis.protocol.amqp.exceptions.ActiveMQAMQPException;
 import org.apache.activemq.artemis.protocol.amqp.proton.handler.EventHandler;
+import org.apache.activemq.artemis.protocol.amqp.proton.handler.ExecutorNettyAdapter;
 import org.apache.activemq.artemis.protocol.amqp.proton.handler.ExtCapability;
+import org.apache.activemq.artemis.protocol.amqp.proton.handler.NettyExecutorAdapter;
 import org.apache.activemq.artemis.protocol.amqp.proton.handler.NettyLimitedAdapter;
 import org.apache.activemq.artemis.protocol.amqp.proton.handler.ProtonHandler;
 import org.apache.activemq.artemis.protocol.amqp.sasl.AnonymousServerSASL;
@@ -116,12 +119,12 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
       this.scheduledPool = scheduledPool;
       connectionCallback.setConnection(this);
-      ArtemisExecutor nettyExecutor;
+      EventLoop nettyExecutor;
       if (connectionCallback.getTransportConnection() instanceof NettyConnection) {
-         EventLoop eventLoop = ((NettyConnection) connectionCallback.getTransportConnection()).getNettyChannel().eventLoop();
-         nettyExecutor = new NettyLimitedAdapter(eventLoop, 50);
+         nettyExecutor = ((NettyConnection) connectionCallback.getTransportConnection()).getNettyChannel().eventLoop();
+         //nettyExecutor = new NettyLimitedAdapter(eventLoop, 50);
       } else {
-         nettyExecutor = protocolManager.getServer().getExecutorFactory().getExecutor();
+         nettyExecutor = new ExecutorNettyAdapter(protocolManager.getServer().getExecutorFactory().getExecutor());
       }
       this.handler = new ProtonHandler(nettyExecutor, protocolManager.getServer().getExecutorFactory().getExecutor(), isIncomingConnection);
       handler.addEventHandler(this);

@@ -17,6 +17,7 @@
 
 package org.apache.activemq.artemis.protocol.amqp.proton.handler;
 
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 

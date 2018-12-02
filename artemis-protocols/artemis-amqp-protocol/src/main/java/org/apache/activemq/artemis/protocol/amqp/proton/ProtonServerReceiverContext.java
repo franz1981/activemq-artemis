@@ -18,6 +18,7 @@ package org.apache.activemq.artemis.protocol.amqp.proton;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration;
 import org.apache.activemq.artemis.api.core.ActiveMQSecurityException;
@@ -66,6 +67,8 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
 
    protected final AMQPSessionCallback sessionSPI;
 
+   private final AtomicInteger pending = new AtomicInteger(0);
+
    /**
     * We create this AtomicRunnable with setRan.
     * This is because we always reuse the same instance.
@@ -80,11 +83,16 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
    public static AtomicRunnable createCreditRunnable(int refill,
                                                      int threshold,
                                                      Receiver receiver,
+                                                     AtomicInteger pending,
                                                      AMQPConnectionContext connection) {
       Runnable creditRunnable = () -> {
-         if (receiver.getCredit() <= threshold) {
-            int topUp = refill - receiver.getCredit();
+         int actualCredits = receiver.getCredit() + pending.get();
+         //System.out.println("receiver.getCredit=" + receiver.getCredit() + " threshold=" + threshold + " pending = " + pending.get() + " actual credits = " + actualCredits);
+         //new Exception("receiver.getCredit=" + receiver.getCredit() + " threshold=" + threshold + " pending = " + pending.get() + " actual credits = " + actualCredits).printStackTrace(System.out);
+         if (actualCredits <= threshold) {
+            int topUp = refill - actualCredits;
             if (topUp > 0) {
+               // System.out.println("Sending " + topUp + " towards client");
                receiver.flow(topUp);
                connection.noBatch().flush();
             }
@@ -93,7 +101,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
       return new AtomicRunnable() {
          @Override
          public void atomicRun() {
-            connection.runLater(creditRunnable);
+            connection.runNow(creditRunnable);
          }
       };
    }
@@ -117,7 +125,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
       this.sessionSPI = sessionSPI;
       this.amqpCredits = connection.getAmqpCredits();
       this.minCreditRefresh = connection.getAmqpLowCredits();
-      this.creditRunnable = createCreditRunnable(amqpCredits, minCreditRefresh, receiver, connection).setRan();
+      this.creditRunnable = createCreditRunnable(amqpCredits, minCreditRefresh, receiver, pending, connection).setRan();
    }
 
    @Override
@@ -255,43 +263,53 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
     */
    @Override
    public void onMessage(Delivery delivery) throws ActiveMQAMQPException {
-      try {
-         connection.requireInHandler();
-         Receiver receiver = ((Receiver) delivery.getLink());
+      connection.requireInHandler();
+      Receiver receiver = ((Receiver) delivery.getLink());
 
-         if (receiver.current() != delivery) {
-            return;
-         }
+      if (receiver.current() != delivery) {
+         return;
+      }
 
-         if (delivery.isAborted()) {
-            // Aborting implicitly remotely settles, so advance
-            // receiver to the next delivery and settle locally.
-            receiver.advance();
-            delivery.settle();
-
-            // Replenish the credit if not doing a drain
-            if (!receiver.getDrain()) {
-               receiver.flow(1);
-            }
-
-            return;
-         } else if (delivery.isPartial()) {
-            return;
-         }
-
-         Transaction tx = null;
-         ReadableBuffer data = receiver.recv();
+      if (delivery.isAborted()) {
+         // Aborting implicitly remotely settles, so advance
+         // receiver to the next delivery and settle locally.
          receiver.advance();
+         delivery.settle();
 
-         if (delivery.getRemoteState() instanceof TransactionalState) {
-            TransactionalState txState = (TransactionalState) delivery.getRemoteState();
-            tx = this.sessionSPI.getTransaction(txState.getTxnId(), false);
+         // Replenish the credit if not doing a drain
+         if (!receiver.getDrain()) {
+            receiver.flow(1);
          }
 
-         sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data);
+         return;
+      } else if (delivery.isPartial()) {
+         return;
+      }
 
-         flow();
-      } catch (Exception e) {
+      ReadableBuffer data = receiver.recv();
+      receiver.advance();
+      Transaction tx = null;
+
+      if (delivery.getRemoteState() instanceof TransactionalState) {
+         TransactionalState txState = (TransactionalState) delivery.getRemoteState();
+         tx = this.sessionSPI.getTransaction(txState.getTxnId(), false);
+      }
+
+      final Transaction txUsed = tx;
+      pending.incrementAndGet();
+      //System.out.println("Pending::" + pending.get());
+
+
+      //sessionSPI.getSessionExecutor().execute(() -> actualDelivery(delivery, receiver, data, txUsed));
+      actualDelivery(delivery, receiver, data, txUsed);
+   }
+
+   private void actualDelivery(Delivery delivery, Receiver receiver, ReadableBuffer data, Transaction tx) {
+      try {
+        sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data);
+        pending.decrementAndGet();
+        //System.out.println("done at " + pending.get());
+     } catch (Exception e) {
          log.warn(e.getMessage(), e);
          Rejected rejected = new Rejected();
          ErrorCondition condition = new ErrorCondition();
@@ -301,13 +319,17 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
          } else {
             condition.setCondition(Symbol.valueOf("failed"));
          }
+         connection.runLater(() -> {
 
-         condition.setDescription(e.getMessage());
-         rejected.setError(condition);
+            condition.setDescription(e.getMessage());
+            rejected.setError(condition);
 
-         delivery.disposition(rejected);
-         delivery.settle();
-         flow();
+            delivery.disposition(rejected);
+            delivery.settle();
+            flow();
+            connection.flush();
+         });
+
       }
    }
 
@@ -331,6 +353,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
    }
 
    public void flow() {
+      connection.requireInHandler();
       if (!creditRunnable.isRun()) {
          return; // nothing to be done as the previous one did not run yet
       }

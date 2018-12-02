@@ -74,7 +74,7 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
 
    protected AMQPConnectionContext amqpConnection;
 
-   private final Executor closeExecutor;
+   private final Executor sessionExecutor;
 
    private String remoteContainerId;
 
@@ -86,11 +86,11 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
 
    public AMQPConnectionCallback(ProtonProtocolManager manager,
                                  Connection connection,
-                                 Executor closeExecutor,
+                                 Executor sessionExecutor,
                                  ActiveMQServer server) {
       this.manager = manager;
       this.connection = connection;
-      this.closeExecutor = closeExecutor;
+      this.sessionExecutor = sessionExecutor;
       this.server = server;
       saslMechanisms = manager.getSaslMechanisms();
    }
@@ -218,7 +218,7 @@ public class AMQPConnectionCallback implements FailureListener, CloseListener {
 
 
    public AMQPSessionCallback createSessionCallback(AMQPConnectionContext connection) {
-      return new AMQPSessionCallback(this, manager, connection, this.connection, closeExecutor, server.newOperationContext());
+      return new AMQPSessionCallback(this, manager, connection, this.connection, sessionExecutor, server.newOperationContext());
    }
 
    public void sendSASLSupported() {

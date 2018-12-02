@@ -145,7 +145,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
                @Override
                public void run() {
                   try {
-                     connection.runLater(() -> {
+                     connection.runNow(() -> {
                         plugSender.reportDrained();
                         setupCredit();
                      });
@@ -156,7 +156,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
             });
          }
       } else {
-         serverConsumer.promptDelivery();
+         serverConsumer.receiveCredits(-1);
       }
    }
 
@@ -164,14 +164,17 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       if (!connection.flowControl(brokerConsumer::promptDelivery)) {
          return false;
       }
+
+      //return true;
+      //return getSender().getCredit() > 0;
       synchronized (creditsLock) {
-         return credits > 0;
+         return credits -pending.get() > 0;
       }
    }
 
    private void setupCredit() {
       synchronized (creditsLock) {
-         this.credits = sender.getCredit() - pending.get();
+         this.credits = sender.getCredit();
          if (credits < 0) {
             credits = 0;
          }
@@ -745,9 +748,9 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
             pending.incrementAndGet();
             credits--;
          }
-         connection.runLater(() -> {
-            // Let the Message decide how to present the message bytes
-            ReadableBuffer sendBuffer = message.getSendBuffer(deliveryCount);
+         // Let the Message decide how to present the message bytes
+         ReadableBuffer sendBuffer = message.getSendBuffer(deliveryCount);
+         connection.runNow(() -> {
 
             boolean releaseRequired = sendBuffer instanceof NettyReadable;
             final Delivery delivery;
@@ -781,7 +784,9 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
 
                connection.flush();
             } finally {
-               pending.decrementAndGet();
+               synchronized (creditsLock) {
+                  pending.decrementAndGet();
+               }
                if (releaseRequired) {
                   ((NettyReadable) sendBuffer).getByteBuf().release();
                }

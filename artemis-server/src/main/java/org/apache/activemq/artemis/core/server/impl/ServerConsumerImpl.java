@@ -921,7 +921,7 @@ public class ServerConsumerImpl implements ServerConsumer, ReadyListener {
             logger.trace("individualACK starting new TX");
          }
          startedTransaction = true;
-         tx = new TransactionImpl(storageManager, session.getSessionExecutor());
+         tx = new TransactionImpl(storageManager);
       }
 
       try {

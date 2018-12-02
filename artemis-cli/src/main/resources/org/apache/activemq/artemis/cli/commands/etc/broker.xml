@@ -83,7 +83,7 @@ ${global-max-section}
                     See https://issues.apache.org/jira/browse/ARTEMIS-1644 for more information. -->
 
          <!-- Acceptor for every supported protocol -->
-         <acceptor name="artemis">tcp://${host}:${default.port}?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;protocols=CORE,AMQP,STOMP,HORNETQ,MQTT,OPENWIRE;useEpoll=true;amqpCredits=1000;amqpLowCredits=300;</acceptor>
+         <acceptor name="artemis">tcp://${host}:${default.port}?tcpSendBufferSize=1048576;tcpReceiveBufferSize=1048576;protocols=CORE,AMQP,STOMP,HORNETQ,MQTT,OPENWIRE;useEpoll=true;amqpCredits=100;amqpLowCredits=30;</acceptor>
 ${amqp-acceptor}${stomp-acceptor}${hornetq-acceptor}${mqtt-acceptor}
       </acceptors>
 

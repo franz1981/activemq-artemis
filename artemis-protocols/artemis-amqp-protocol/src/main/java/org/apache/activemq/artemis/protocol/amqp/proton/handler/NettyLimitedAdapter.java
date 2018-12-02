@@ -55,6 +55,10 @@ public class NettyLimitedAdapter extends OrderedExecutor {
 
       // don't worry about locks, this is single threaded
 
+      if (limit <= 0) {
+         return true;
+      }
+
       if (++count >= limit) {
          count = 0;
          runDelegate();

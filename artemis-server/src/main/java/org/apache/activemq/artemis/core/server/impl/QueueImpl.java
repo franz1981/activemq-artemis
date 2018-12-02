@@ -833,7 +833,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
             return;
          }
 
-         if (supportsDirectDeliver && !directDeliver && direct && System.currentTimeMillis() - lastDirectDeliveryCheck > CHECK_QUEUE_SIZE_PERIOD) {
+         if (supportsDirectDeliver && !directDeliver && deliveriesInTransit.getCount() == 0 && direct && System.currentTimeMillis() - lastDirectDeliveryCheck > CHECK_QUEUE_SIZE_PERIOD) {
             if (logger.isTraceEnabled()) {
                logger.trace("Checking to re-enable direct deliver on queue " + this.getName());
             }
@@ -847,6 +847,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
                   // We must block on the executor to ensure any async deliveries have completed or we might get out of order
                   // deliveries
                   // Go into direct delivery mode
+                  System.out.println("Back to direct delivery");
                   directDeliver = supportsDirectDeliver;
                   if (logger.isTraceEnabled()) {
                      logger.trace("Setting direct deliverer to " + supportsDirectDeliver);

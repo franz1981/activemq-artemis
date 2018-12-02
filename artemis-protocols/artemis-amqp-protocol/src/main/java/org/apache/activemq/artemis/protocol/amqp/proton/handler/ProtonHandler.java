@@ -22,10 +22,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
+import io.netty.channel.EventLoop;
 import org.apache.activemq.artemis.protocol.amqp.proton.AMQPConnectionContext;
 import org.apache.activemq.artemis.protocol.amqp.proton.ProtonInitializable;
 import org.apache.activemq.artemis.protocol.amqp.sasl.ClientSASL;
@@ -76,7 +78,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    protected boolean receivedFirstPacket = false;
 
-   private final ArtemisExecutor workerExecutor;
+   private final EventLoop workerExecutor;
 
    private final ArtemisExecutor poolExecutor;
 
@@ -84,7 +86,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    boolean inDispatch = false;
 
-   public ProtonHandler(ArtemisExecutor workerExecutor, ArtemisExecutor poolExecutor, boolean isServer) {
+   public ProtonHandler(EventLoop workerExecutor, ArtemisExecutor poolExecutor, boolean isServer) {
       this.workerExecutor = workerExecutor;
       this.poolExecutor = poolExecutor;
       this.readyListener = () -> runLater(this::flush);
@@ -142,9 +144,11 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    public void requireHandler() {
-      if (!workerExecutor.inHandler(Thread.currentThread())) {
+      if (!workerExecutor.inEventLoop()) {
+         new Exception("saco!!!").printStackTrace();
          // this should not happen unless there is an obvious programming error
          log.warn("Using inHandler is required", new Exception("trace"));
+         System.exit(-1);
          throw new IllegalStateException("this method requires to be called within the handler, use the executor");
       }
    }
@@ -267,7 +271,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    public void runNow(Runnable runnable) {
-      if (workerExecutor.inHandler(Thread.currentThread())) {
+      if (workerExecutor.inEventLoop()) {
          runnable.run();
       } else {
          workerExecutor.execute(runnable);
@@ -279,7 +283,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    public void flush() {
-      if (workerExecutor.inHandler(Thread.currentThread())) {
+      if (workerExecutor.inEventLoop()) {
          transport.process();
          dispatch();
       } else {
@@ -492,7 +496,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
 
    public void handleError(Exception e) {
-      if (workerExecutor.inHandler(Thread.currentThread())) {
+      if (workerExecutor.inEventLoop()) {
          internalHandlerError(e);
       } else {
          runLater(() -> internalHandlerError(e));
