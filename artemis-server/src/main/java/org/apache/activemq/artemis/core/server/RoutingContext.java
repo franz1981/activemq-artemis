@@ -22,9 +22,20 @@ import java.util.Map;
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.core.postoffice.Binding;
+import org.apache.activemq.artemis.core.postoffice.Bindings;
 import org.apache.activemq.artemis.core.transaction.Transaction;
 
 public interface RoutingContext {
+
+   // This routing context is clear enough to be reused among different messages on the same queue
+   boolean isReusable();
+
+   int getPreviousBindingsVersion();
+
+   SimpleString getPreviousAddress();
+
+   RoutingContext setReusable(boolean reusable, int version);
 
    Transaction getTransaction();
 
@@ -53,6 +64,8 @@ public interface RoutingContext {
    void setRoutingType(RoutingType routingType);
 
    SimpleString getAddress(Message message);
+
+   SimpleString getAddress();
 
    RoutingType getRoutingType();
 

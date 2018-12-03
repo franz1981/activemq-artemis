@@ -1842,6 +1842,21 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
                                             final boolean direct,
                                             final boolean noAutoCreateQueue) throws Exception {
 
+      //System.out.println("Reusable = " + routingContext.isReusable() + " address on context=" + routingContext.getAddress(msg));
+      /*if (routingContext.isReusable() && routingContext.getAddress(msg).equals(routingContext.getAddress(msg))) {
+         //System.out.println("Reusing routing");
+         if (tx == null || autoCommitSends) {
+            routingContext.setTransaction(null);
+         } else {
+            routingContext.setTransaction(tx);
+         }
+
+         postOffice.processRoute(msg, routingContext, direct);
+
+         return RoutingStatus.OK;
+      }
+      routingContext.clear(); */
+
       RoutingStatus result = RoutingStatus.OK;
 
       RoutingType routingType = msg.getRoutingType();
@@ -1873,26 +1888,23 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       }
 
       if (tx == null || autoCommitSends) {
+         routingContext.setTransaction(null);
       } else {
          routingContext.setTransaction(tx);
       }
 
-      try {
-         routingContext.setAddress(art.getName());
-         routingContext.setRoutingType(art.getRoutingType());
+      routingContext.setAddress(art.getName());
+      routingContext.setRoutingType(art.getRoutingType());
 
-         result = postOffice.route(msg, routingContext, direct);
+      result = postOffice.route(msg, routingContext, direct);
 
-         Pair<Object, AtomicLong> value = targetAddressInfos.get(msg.getAddressSimpleString());
+      Pair<Object, AtomicLong> value = targetAddressInfos.get(msg.getAddressSimpleString());
 
-         if (value == null) {
-            targetAddressInfos.put(msg.getAddressSimpleString(), new Pair<>(msg.getUserID(), new AtomicLong(1)));
-         } else {
-            value.setA(msg.getUserID());
-            value.getB().incrementAndGet();
-         }
-      } finally {
-         routingContext.clear();
+      if (value == null) {
+         targetAddressInfos.put(msg.getAddressSimpleString(), new Pair<>(msg.getUserID(), new AtomicLong(1)));
+      } else {
+         value.setA(msg.getUserID());
+         value.getB().incrementAndGet();
       }
       return result;
    }
@@ -1948,7 +1960,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    @Override
    public Pair<SimpleString, EnumSet<RoutingType>> getAddressAndRoutingTypes(SimpleString address,
-                                                                         EnumSet<RoutingType> defaultRoutingTypes) {
+                                                                             EnumSet<RoutingType> defaultRoutingTypes) {
       if (prefixEnabled) {
          return PrefixUtil.getAddressAndRoutingTypes(address, defaultRoutingTypes, prefixes);
       }

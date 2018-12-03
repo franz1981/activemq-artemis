@@ -876,6 +876,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
       AddressInfo addressInfo = addressManager.getAddressInfo(address);
 
       if (bindingMove != null) {
+         context.clear();
          bindingMove.route(message, context);
          if (addressInfo != null) {
             addressInfo.incrementRoutedMessageCount();

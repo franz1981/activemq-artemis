@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
@@ -63,6 +64,11 @@ public final class BindingsImpl implements Bindings {
 
    private final SimpleString name;
 
+   /**
+    * This has a version about adds and removes
+    */
+   private final AtomicInteger version = new AtomicInteger(1);
+
    public BindingsImpl(final SimpleString name, final GroupingHandler groupingHandler) {
       this.groupingHandler = groupingHandler;
       this.name = name;
@@ -92,6 +98,7 @@ public final class BindingsImpl implements Bindings {
 
    @Override
    public void addBinding(final Binding binding) {
+      version.incrementAndGet();
       if (logger.isTraceEnabled()) {
          logger.trace("addBinding(" + binding + ") being called");
       }
@@ -127,6 +134,7 @@ public final class BindingsImpl implements Bindings {
 
    @Override
    public void removeBinding(final Binding binding) {
+      version.incrementAndGet();
       if (binding.isExclusive()) {
          exclusiveBindings.remove(binding);
       } else {
@@ -267,11 +275,9 @@ public final class BindingsImpl implements Bindings {
 
          if (binding.getFilter() == null || binding.getFilter().match(message)) {
             binding.getBindable().route(message, context);
-
             routed = true;
          }
       }
-
       if (!routed) {
          // Remove the ids now, in order to avoid double check
          ids = message.removeExtraBytesProperty(Message.HDR_ROUTE_TO_IDS);
@@ -280,30 +286,58 @@ public final class BindingsImpl implements Bindings {
          SimpleString groupId = message.getGroupID();
 
          if (ids != null) {
+            context.clear();
             routeFromCluster(message, context, ids);
          } else if (groupingHandler != null && groupRouting && groupId != null) {
+            context.clear();
             routeUsingStrictOrdering(message, context, groupingHandler, groupId, 0);
          } else {
-            if (logger.isTraceEnabled()) {
-               logger.trace("Routing message " + message + " on binding=" + this);
+
+            // System.out.println("reused = " + context.isReusable() + " count = " + context.getQueueCount() + " address = " + context.getAddress(message) + " and previous address = " + context.getPreviousAddress());
+            if (context.isReusable() && context.getQueueCount() > 0 && context.getAddress(message).equals(context.getPreviousAddress()) && context.getPreviousBindingsVersion() == version.get()) {
+               // This is an optimization, where we are reusing the previous route information
+               // nothing to do here
+               // System.out.println("Reusing routing");
+               return;
+            } else {
+               context.clear();
+               simpleRouting(message, context);
             }
-            for (Map.Entry<SimpleString, List<Binding>> entry : routingNameBindingMap.entrySet()) {
-               SimpleString routingName = entry.getKey();
+         }
+      }
+   }
 
-               List<Binding> bindings = entry.getValue();
+   private void simpleRouting(Message message, RoutingContext context) throws Exception {
+      if (logger.isTraceEnabled()) {
+         logger.trace("Routing message " + message + " on binding=" + this);
+      }
 
-               if (bindings == null) {
-                  // The value can become null if it's concurrently removed while we're iterating - this is expected
-                  // ConcurrentHashMap behaviour!
-                  continue;
-               }
+      boolean reusable = true;
 
-               Binding theBinding = getNextBinding(message, routingName, bindings);
+      for (Map.Entry<SimpleString, List<Binding>> entry : routingNameBindingMap.entrySet()) {
+         SimpleString routingName = entry.getKey();
 
-               if (theBinding != null) {
-                  theBinding.route(message, context);
-               }
-            }
+         List<Binding> bindings = entry.getValue();
+
+         if (bindings == null) {
+            // The value can become null if it's concurrently removed while we're iterating - this is expected
+            // ConcurrentHashMap behaviour!
+            continue;
+         }
+
+         Binding theBinding = getNextBinding(message, routingName, bindings);
+
+         if (reusable && theBinding.getFilter() == null && bindings.size() == 1) {
+            System.out.println("Setting reusable");
+            context.setReusable(true, version.get());
+         } else {
+            reusable = false;
+            context.setReusable(false, version.get());
+            System.out.println("Removing reused");
+         }
+
+         if (theBinding != null) {
+            theBinding.route(message, context);
          }
       }
    }

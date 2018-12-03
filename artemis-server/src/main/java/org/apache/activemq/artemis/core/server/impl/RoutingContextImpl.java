@@ -24,6 +24,7 @@ import java.util.concurrent.Executor;
 
 import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
+import org.apache.activemq.artemis.core.postoffice.Binding;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.Queue;
 import org.apache.activemq.artemis.core.server.RouteContextList;
@@ -42,7 +43,13 @@ public final class RoutingContextImpl implements RoutingContext {
 
    private SimpleString address;
 
+   private SimpleString previousAddress;
+
    private RoutingType routingType;
+
+   boolean reusable = false;
+
+   volatile int version;
 
    private final Executor executor;
 
@@ -56,12 +63,37 @@ public final class RoutingContextImpl implements RoutingContext {
    }
 
    @Override
-   public void clear() {
-      transaction = null;
+   public boolean isReusable() {
+      return reusable;
+   }
 
+   @Override
+   public int getPreviousBindingsVersion() {
+      return version;
+   }
+
+   @Override
+   public SimpleString getPreviousAddress() {
+      return previousAddress;
+   }
+
+   @Override
+   public RoutingContext setReusable(boolean reusable, int previousBindings) {
+      this.reusable = reusable;
+      this.version = previousBindings;
+      this.previousAddress = address;
+      return this;
+   }
+
+   @Override
+   public void clear() {
       map.clear();
 
       queueCount = 0;
+
+      this.version = 0;
+
+      this.reusable = false;
    }
 
    @Override
@@ -118,6 +150,11 @@ public final class RoutingContextImpl implements RoutingContext {
       if (address == null && message != null) {
          return message.getAddressSimpleString();
       }
+      return address;
+   }
+
+   @Override
+   public SimpleString getAddress() {
       return address;
    }
 
