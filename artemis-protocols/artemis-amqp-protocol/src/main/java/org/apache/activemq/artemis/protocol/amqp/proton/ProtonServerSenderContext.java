@@ -168,7 +168,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       //return true;
       //return getSender().getCredit() > 0;
       synchronized (creditsLock) {
-         return credits -pending.get() > 0;
+         return credits - pending.get() > 0;
       }
    }
 

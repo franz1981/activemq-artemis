@@ -310,10 +310,9 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
 
    private void actualDelivery(Delivery delivery, Receiver receiver, ReadableBuffer data, Transaction tx) {
       try {
-        sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data, routingContext);
-        pending.decrementAndGet();
-        //System.out.println("done at " + pending.get());
-     } catch (Exception e) {
+         sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data, routingContext);
+         pending.decrementAndGet();
+      } catch (Exception e) {
          log.warn(e.getMessage(), e);
          Rejected rejected = new Rejected();
          ErrorCondition condition = new ErrorCondition();
