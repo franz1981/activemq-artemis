@@ -22,7 +22,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 import io.netty.buffer.ByteBuf;
@@ -181,12 +180,6 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    public void flushBytes() {
       requireHandler();
 
-      for (EventHandler handler : handlers) {
-         if (!handler.flowControl(readyListener)) {
-            return;
-         }
-      }
-
       if (!scheduledFlush) {
          scheduledFlush = true;
          workerExecutor.execute(this::actualFlush);
@@ -195,6 +188,13 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    private void actualFlush() {
       requireHandler();
+
+      for (EventHandler handler : handlers) {
+         if (!handler.flowControl(readyListener)) {
+            scheduledFlush = false;
+            return;
+         }
+      }
 
       try {
          while (true) {
