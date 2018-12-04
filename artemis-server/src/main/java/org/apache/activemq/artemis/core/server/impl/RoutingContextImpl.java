@@ -111,15 +111,14 @@ public final class RoutingContextImpl implements RoutingContext {
 
    @Override
    public void processReferences(final List<MessageReference> refs, final boolean direct) {
-      internalprocessReferences(refs, direct);
-   }
-
-   private void internalprocessReferences(final List<MessageReference> refs, final boolean direct) {
-      for (MessageReference ref : refs) {
+      //Assume that an ArrayList will be used to be efficient on List::get(i).
+      //It avoids using an iterator, because Queue::addTail contains volatile operations
+      //that would prevent the iterator to be allocated on the stack.
+      for (int i = 0, size = refs.size(); i < size; i++) {
+         final MessageReference ref = refs.get(0);
          ref.getQueue().addTail(ref, direct);
       }
    }
-
 
    @Override
    public void addQueueWithAck(SimpleString address, Queue queue) {
