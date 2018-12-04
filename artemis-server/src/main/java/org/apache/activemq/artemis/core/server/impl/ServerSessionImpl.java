@@ -160,7 +160,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    private final SimpleString managementAddress;
 
-   protected final RoutingContext routingContext;
+   protected final RoutingContext _routingContext;
 
    protected final SessionCallback callback;
 
@@ -269,7 +269,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
       this.sessionExecutor = server.getExecutorFactory().getExecutor();
 
-      this.routingContext = new RoutingContextImpl(null);
+      this._routingContext = new RoutingContextImpl(null);
 
       if (!xa) {
          tx = newTransaction();
@@ -1479,12 +1479,20 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return lsm;
    }
 
-
    @Override
    public synchronized RoutingStatus send(Transaction tx,
                                           Message msg,
                                           final boolean direct,
                                           boolean noAutoCreateQueue) throws Exception {
+      return send(tx, msg, direct, noAutoCreateQueue, _routingContext);
+   }
+
+   @Override
+   public synchronized RoutingStatus send(Transaction tx,
+                                          Message msg,
+                                          final boolean direct,
+                                          boolean noAutoCreateQueue,
+                                          RoutingContext routingContext) throws Exception {
 
       final Message message;
       if ((msg.getEncodeSize() > storageManager.getMaxRecordSize()) && !msg.isLargeMessage()) {
@@ -1539,7 +1547,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
             result = handleManagementMessage(tx, message, direct);
          } else {
-            result = doSend(tx, message, address, direct, noAutoCreateQueue);
+            result = doSend(tx, message, address, direct, noAutoCreateQueue, routingContext);
          }
 
       } catch (Exception e) {
@@ -1778,7 +1786,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          }
          reply.setAddress(replyTo);
 
-         doSend(tx, reply, null, direct, false);
+         doSend(tx, reply, null, direct, false, _routingContext);
       }
 
       return RoutingStatus.OK;
@@ -1835,27 +1843,24 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       theTx.rollback();
    }
 
+
    @Override
    public synchronized RoutingStatus doSend(final Transaction tx,
                                             final Message msg,
                                             final SimpleString originalAddress,
                                             final boolean direct,
                                             final boolean noAutoCreateQueue) throws Exception {
+      return doSend(tx, msg, originalAddress, direct, noAutoCreateQueue, _routingContext);
+   }
 
-      //System.out.println("Reusable = " + routingContext.isReusable() + " address on context=" + routingContext.getAddress(msg));
-      /*if (routingContext.isReusable() && routingContext.getAddress(msg).equals(routingContext.getAddress(msg))) {
-         //System.out.println("Reusing routing");
-         if (tx == null || autoCommitSends) {
-            routingContext.setTransaction(null);
-         } else {
-            routingContext.setTransaction(tx);
-         }
 
-         postOffice.processRoute(msg, routingContext, direct);
-
-         return RoutingStatus.OK;
-      }
-      routingContext.clear(); */
+      @Override
+   public synchronized RoutingStatus doSend(final Transaction tx,
+                                            final Message msg,
+                                            final SimpleString originalAddress,
+                                            final boolean direct,
+                                            final boolean noAutoCreateQueue,
+                                            final RoutingContext routingContext) throws Exception {
 
       RoutingStatus result = RoutingStatus.OK;
 

@@ -26,7 +26,9 @@ import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.security.CheckType;
 import org.apache.activemq.artemis.core.security.SecurityAuth;
+import org.apache.activemq.artemis.core.server.RoutingContext;
 import org.apache.activemq.artemis.core.server.impl.AddressInfo;
+import org.apache.activemq.artemis.core.server.impl.RoutingContextImpl;
 import org.apache.activemq.artemis.core.transaction.Transaction;
 import org.apache.activemq.artemis.protocol.amqp.broker.AMQPSessionCallback;
 import org.apache.activemq.artemis.protocol.amqp.exceptions.ActiveMQAMQPException;
@@ -68,6 +70,8 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
    protected final AMQPSessionCallback sessionSPI;
 
    private final AtomicInteger pending = new AtomicInteger(0);
+
+   RoutingContext routingContext = new RoutingContextImpl(null);
 
    /**
     * We create this AtomicRunnable with setRan.
@@ -306,7 +310,7 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
 
    private void actualDelivery(Delivery delivery, Receiver receiver, ReadableBuffer data, Transaction tx) {
       try {
-        sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data);
+        sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data, routingContext);
         pending.decrementAndGet();
         //System.out.println("done at " + pending.get());
      } catch (Exception e) {

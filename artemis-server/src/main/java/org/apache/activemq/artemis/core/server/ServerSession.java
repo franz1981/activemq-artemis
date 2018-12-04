@@ -244,11 +244,25 @@ public interface ServerSession extends SecurityAuth {
                       boolean direct,
                       boolean noAutoCreateQueue) throws Exception;
 
+   RoutingStatus send(Transaction tx,
+                      Message message,
+                      boolean direct,
+                      boolean noAutoCreateQueue,
+                      RoutingContext routingContext) throws Exception;
+
+
    RoutingStatus doSend(Transaction tx,
                         Message msg,
                         SimpleString originalAddress,
                         boolean direct,
                         boolean noAutoCreateQueue) throws Exception;
+
+   RoutingStatus doSend(Transaction tx,
+                        Message msg,
+                        SimpleString originalAddress,
+                        boolean direct,
+                        boolean noAutoCreateQueue,
+                        RoutingContext routingContext) throws Exception;
 
    RoutingStatus send(Message message, boolean direct, boolean noAutoCreateQueue) throws Exception;
 
