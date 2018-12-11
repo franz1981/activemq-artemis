@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.activemq.artemis.Closeable;
@@ -159,7 +160,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    private final SimpleString managementAddress;
 
-   protected final RoutingContext routingContext = new RoutingContextImpl(null);
+   protected final RoutingContext _routingContext;
 
    protected final SessionCallback callback;
 
@@ -189,6 +190,8 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
    private Map<SimpleString, RoutingType> prefixes;
 
    private Set<Closeable> closeables;
+
+   private final Executor sessionExecutor;
 
    public ServerSessionImpl(final String name,
                             final String username,
@@ -264,6 +267,10 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       remotingConnection.addFailureListener(this);
       this.context = context;
 
+      this.sessionExecutor = server.getExecutorFactory().getExecutor();
+
+      this._routingContext = new RoutingContextImpl(null);
+
       if (!xa) {
          tx = newTransaction();
       }
@@ -281,6 +288,11 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          closeables = new HashSet<>();
       }
       this.closeables.add(closeable);
+   }
+
+   @Override
+   public Executor getSessionExecutor() {
+      return sessionExecutor;
    }
 
    @Override
@@ -1467,12 +1479,20 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return lsm;
    }
 
-
    @Override
    public synchronized RoutingStatus send(Transaction tx,
                                           Message msg,
                                           final boolean direct,
                                           boolean noAutoCreateQueue) throws Exception {
+      return send(tx, msg, direct, noAutoCreateQueue, _routingContext);
+   }
+
+   @Override
+   public synchronized RoutingStatus send(Transaction tx,
+                                          Message msg,
+                                          final boolean direct,
+                                          boolean noAutoCreateQueue,
+                                          RoutingContext routingContext) throws Exception {
 
       final Message message;
       if ((msg.getEncodeSize() > storageManager.getMaxRecordSize()) && !msg.isLargeMessage()) {
@@ -1527,7 +1547,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
             result = handleManagementMessage(tx, message, direct);
          } else {
-            result = doSend(tx, message, address, direct, noAutoCreateQueue);
+            result = doSend(tx, message, address, direct, noAutoCreateQueue, routingContext);
          }
 
       } catch (Exception e) {
@@ -1766,7 +1786,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          }
          reply.setAddress(replyTo);
 
-         doSend(tx, reply, null, direct, false);
+         doSend(tx, reply, null, direct, false, _routingContext);
       }
 
       return RoutingStatus.OK;
@@ -1823,12 +1843,24 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       theTx.rollback();
    }
 
+
    @Override
    public synchronized RoutingStatus doSend(final Transaction tx,
                                             final Message msg,
                                             final SimpleString originalAddress,
                                             final boolean direct,
                                             final boolean noAutoCreateQueue) throws Exception {
+      return doSend(tx, msg, originalAddress, direct, noAutoCreateQueue, _routingContext);
+   }
+
+
+   @Override
+   public synchronized RoutingStatus doSend(final Transaction tx,
+                                            final Message msg,
+                                            final SimpleString originalAddress,
+                                            final boolean direct,
+                                            final boolean noAutoCreateQueue,
+                                            final RoutingContext routingContext) throws Exception {
 
       RoutingStatus result = RoutingStatus.OK;
 
@@ -1861,6 +1893,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       }
 
       if (tx == null || autoCommitSends) {
+         routingContext.setTransaction(null);
       } else {
          routingContext.setTransaction(tx);
       }
@@ -1880,7 +1913,9 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
             value.getB().incrementAndGet();
          }
       } finally {
-         routingContext.clear();
+         if (!routingContext.isReusable()) {
+            routingContext.clear();
+         }
       }
       return result;
    }
@@ -1936,7 +1971,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    @Override
    public Pair<SimpleString, EnumSet<RoutingType>> getAddressAndRoutingTypes(SimpleString address,
-                                                                         EnumSet<RoutingType> defaultRoutingTypes) {
+                                                                             EnumSet<RoutingType> defaultRoutingTypes) {
       if (prefixEnabled) {
          return PrefixUtil.getAddressAndRoutingTypes(address, defaultRoutingTypes, prefixes);
       }
