@@ -627,8 +627,11 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
 
    @Override
    public void route(final Message message, final RoutingContext context) throws Exception {
-      if (purgeOnNoConsumers && getConsumerCount() == 0) {
-         return;
+      if (purgeOnNoConsumers) {
+         context.setReusable(false);
+         if (getConsumerCount() == 0) {
+            return;
+         }
       }
       context.addQueue(address, this);
    }
@@ -833,7 +836,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
             return;
          }
 
-         if (supportsDirectDeliver && !directDeliver && direct && System.currentTimeMillis() - lastDirectDeliveryCheck > CHECK_QUEUE_SIZE_PERIOD) {
+         if (supportsDirectDeliver && !directDeliver && deliveriesInTransit.getCount() == 0 && direct && System.currentTimeMillis() - lastDirectDeliveryCheck > CHECK_QUEUE_SIZE_PERIOD) {
             if (logger.isTraceEnabled()) {
                logger.trace("Checking to re-enable direct deliver on queue " + this.getName());
             }
@@ -843,10 +846,11 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
                // directDeliver flag to be re-computed resulting in direct delivery if the queue is empty
                // We don't recompute it on every delivery since executing isEmpty is expensive for a ConcurrentQueue
 
-               if (deliveriesInTransit.getCount() == 0 && getExecutor().isFlushed() && intermediateMessageReferences.isEmpty() && messageReferences.isEmpty() && !pageIterator.hasNext() && !pageSubscription.isPaging()) {
+               if (deliveriesInTransit.getCount() == 0 && intermediateMessageReferences.isEmpty() && messageReferences.isEmpty() && !pageIterator.hasNext() && !pageSubscription.isPaging() && getExecutor().isFlushed()) {
                   // We must block on the executor to ensure any async deliveries have completed or we might get out of order
                   // deliveries
                   // Go into direct delivery mode
+                  System.out.println("Back to direct delivery");
                   directDeliver = supportsDirectDeliver;
                   if (logger.isTraceEnabled()) {
                      logger.trace("Setting direct deliverer to " + supportsDirectDeliver);
@@ -3141,6 +3145,8 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
                break;
             }
          }
+
+         System.out.println("Nobody handled a direct delivery, returning false");
          return false;
       }
    }

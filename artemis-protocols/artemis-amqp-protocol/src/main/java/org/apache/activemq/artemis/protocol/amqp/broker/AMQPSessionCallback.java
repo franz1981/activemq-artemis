@@ -37,6 +37,7 @@ import org.apache.activemq.artemis.core.security.SecurityAuth;
 import org.apache.activemq.artemis.core.server.AddressQueryResult;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.QueueQueryResult;
+import org.apache.activemq.artemis.core.server.RoutingContext;
 import org.apache.activemq.artemis.core.server.ServerConsumer;
 import org.apache.activemq.artemis.core.server.ServerProducer;
 import org.apache.activemq.artemis.core.server.ServerSession;
@@ -416,7 +417,8 @@ public class AMQPSessionCallback implements SessionCallback {
                           final Delivery delivery,
                           SimpleString address,
                           int messageFormat,
-                          ReadableBuffer data) throws Exception {
+                          ReadableBuffer data,
+                          RoutingContext routingContext) throws Exception {
       AMQPMessage message = new AMQPMessage(messageFormat, data, null, coreMessageObjectPools);
       if (address != null) {
          message.setAddress(address);
@@ -451,7 +453,7 @@ public class AMQPSessionCallback implements SessionCallback {
                rejectMessage(delivery, AmqpError.RESOURCE_LIMIT_EXCEEDED, "Address is full: " + address);
             }
          } else {
-            serverSend(context, transaction, message, delivery, receiver);
+            serverSend(context, transaction, message, delivery, receiver, routingContext);
          }
       } finally {
          resetContext(oldcontext);
@@ -487,10 +489,11 @@ public class AMQPSessionCallback implements SessionCallback {
                            final Transaction transaction,
                            final Message message,
                            final Delivery delivery,
-                           final Receiver receiver) throws Exception {
+                           final Receiver receiver,
+                           final RoutingContext routingContext) throws Exception {
       message.setConnectionID(receiver.getSession().getConnection().getRemoteContainer());
       invokeIncoming((AMQPMessage) message, (ActiveMQProtonRemotingConnection) transportConnection.getProtocolConnection());
-      serverSession.send(transaction, message, directDeliver, false);
+      serverSession.send(transaction, message, directDeliver, false, routingContext);
 
       afterIO(new IOCallback() {
          @Override

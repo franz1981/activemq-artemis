@@ -105,5 +105,4 @@ public interface ServerConsumer extends Consumer, ConsumerInfo {
    long getCreationTime();
 
    String getSessionID();
-
 }
