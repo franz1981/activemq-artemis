@@ -101,4 +101,12 @@ public interface ArtemisExecutor extends Executor {
       }
    }
 
+
+   default boolean inHandler(Thread t) {
+      // it returns true by default, because the expected logic is, if true, use a new executor.
+      // Since there's no guarantee, we go with true which is the most pessimistic scenario on this case
+      // for when this is not implemented
+      return true;
+   }
+
 }

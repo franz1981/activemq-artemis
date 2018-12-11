@@ -25,27 +25,18 @@ package org.apache.activemq.artemis.utils.actors;
  */
 public abstract class HandlerBase {
 
-   //marker instance used to recognize if a thread is performing a packet handling
-   private static final Object DUMMY = Boolean.TRUE;
-
-   // this cannot be static as the Actor will be used within another executor. For that reason
-   // each instance will have its own ThreadLocal.
-   // ... a thread that has its thread-local map populated with DUMMY while performing a handler
-   private final ThreadLocal<Object> inHandler = new ThreadLocal<>();
+   private volatile Thread thread;
 
    protected void enter() {
-      assert inHandler.get() == null : "should be null";
-      inHandler.set(DUMMY);
+      thread = Thread.currentThread();
    }
 
-   public boolean inHandler() {
-      final Object dummy = inHandler.get();
-      return dummy != null;
+   public boolean inHandler(Thread thread) {
+      return thread == this.thread;
    }
 
    protected void leave() {
-      assert inHandler.get() != null : "marker not set";
-      inHandler.set(null);
+      thread = null;
    }
 
 }
