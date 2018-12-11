@@ -52,6 +52,7 @@ import org.apache.activemq.artemis.reader.MessageUtil;
 import org.apache.activemq.artemis.selector.filter.FilterException;
 import org.apache.activemq.artemis.selector.impl.SelectorParser;
 import org.apache.activemq.artemis.spi.core.remoting.Connection;
+import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
 import org.apache.activemq.artemis.utils.CompositeAddress;
 import org.apache.qpid.proton.amqp.DescribedType;
 import org.apache.qpid.proton.amqp.Symbol;
@@ -90,7 +91,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    private final ConnectionFlushIOCallback connectionFlusher = new ConnectionFlushIOCallback();
 
    private Consumer brokerConsumer;
-
+   private ReadyListener onflowControlReady;
    protected final AMQPSessionContext protonSession;
    protected final Sender sender;
    protected final AMQPConnectionContext connection;
@@ -162,7 +163,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    }
 
    public boolean hasCredits() {
-      if (!connection.flowControl(brokerConsumer::promptDelivery)) {
+      if (!connection.flowControl(onflowControlReady)) {
          return false;
       }
 
@@ -488,6 +489,7 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       boolean browseOnly = !multicast && source.getDistributionMode() != null && source.getDistributionMode().equals(COPY);
       try {
          brokerConsumer = (Consumer) sessionSPI.createSender(this, queue, multicast ? null : selector, browseOnly);
+         onflowControlReady = brokerConsumer::promptDelivery;
       } catch (ActiveMQAMQPResourceLimitExceededException e1) {
          throw new ActiveMQAMQPResourceLimitExceededException(e1.getMessage());
       } catch (ActiveMQSecurityException e) {
