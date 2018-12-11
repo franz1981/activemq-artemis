@@ -579,7 +579,7 @@ public class AMQPSessionCallback implements SessionCallback {
       ProtonServerSenderContext plugSender = (ProtonServerSenderContext) consumer.getProtocolContext();
 
       try {
-         return plugSender.deliverMessage(ref, deliveryCount, transportConnection);
+         return plugSender.deliverMessage(ref);
       } catch (Exception e) {
          connection.runNow(() -> {
             plugSender.getSender().setCondition(new ErrorCondition(AmqpError.INTERNAL_ERROR, e.getMessage()));
@@ -695,6 +695,10 @@ public class AMQPSessionCallback implements SessionCallback {
 
    public void setTransactionHandler(ProtonTransactionHandler transactionHandler) {
       this.transactionHandler = transactionHandler;
+   }
+
+   public Connection getTransportConnection() {
+      return transportConnection;
    }
 
    public ProtonTransactionHandler getTransactionHandler() {

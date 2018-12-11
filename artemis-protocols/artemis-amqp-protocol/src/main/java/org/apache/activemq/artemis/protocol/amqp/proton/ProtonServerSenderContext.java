@@ -33,6 +33,7 @@ import org.apache.activemq.artemis.core.persistence.OperationContext;
 import org.apache.activemq.artemis.core.server.AddressQueryResult;
 import org.apache.activemq.artemis.core.server.Consumer;
 import org.apache.activemq.artemis.core.server.MessageReference;
+import org.apache.activemq.artemis.core.server.MessageReferenceCallback;
 import org.apache.activemq.artemis.core.server.QueueQueryResult;
 import org.apache.activemq.artemis.core.server.impl.ServerConsumerImpl;
 import org.apache.activemq.artemis.jms.client.ActiveMQDestination;
@@ -51,7 +52,6 @@ import org.apache.activemq.artemis.protocol.amqp.util.NettyReadable;
 import org.apache.activemq.artemis.reader.MessageUtil;
 import org.apache.activemq.artemis.selector.filter.FilterException;
 import org.apache.activemq.artemis.selector.impl.SelectorParser;
-import org.apache.activemq.artemis.spi.core.remoting.Connection;
 import org.apache.activemq.artemis.utils.CompositeAddress;
 import org.apache.qpid.proton.amqp.DescribedType;
 import org.apache.qpid.proton.amqp.Symbol;
@@ -77,7 +77,7 @@ import org.jboss.logging.Logger;
 /**
  * This is the Equivalent for the ServerConsumer
  */
-public class ProtonServerSenderContext extends ProtonInitializable implements ProtonDeliveryHandler {
+public class ProtonServerSenderContext extends ProtonInitializable implements ProtonDeliveryHandler, MessageReferenceCallback {
 
    private static final Logger log = Logger.getLogger(ProtonServerSenderContext.class);
 
@@ -731,26 +731,24 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
    /**
     * handle an out going message from ActiveMQ Artemis, send via the Proton Sender
     */
-   public int deliverMessage(MessageReference messageReference, int deliveryCount, Connection transportConnection) throws Exception {
+   public int deliverMessage(MessageReference messageReference) throws Exception {
 
       if (closed) {
          return 0;
       }
-
-      AMQPMessage message = CoreAmqpConverter.checkAMQP(messageReference.getMessage());
-      sessionSPI.invokeOutgoing(message, (ActiveMQProtonRemotingConnection) transportConnection.getProtocolConnection());
-
-      // we only need a tag if we are going to settle later
-      byte[] tag = preSettle ? new byte[0] : protonSession.getTag();
 
       try {
          synchronized (creditsLock) {
             pending.incrementAndGet();
             credits--;
          }
-         // Let the Message decide how to present the message bytes
-         ReadableBuffer sendBuffer = message.getSendBuffer(deliveryCount);
-         connection.runNow(() -> executeDelivery(messageReference, message, tag, sendBuffer));
+
+         if (messageReference instanceof Runnable) {
+            messageReference.setCallback(this);
+            connection.runNow((Runnable)messageReference);
+         } else {
+            connection.runNow(() -> executeDelivery(messageReference));
+         }
 
          // This is because on AMQP we only send messages based in credits, not bytes
          return 1;
@@ -759,48 +757,62 @@ public class ProtonServerSenderContext extends ProtonInitializable implements Pr
       }
    }
 
-   private void executeDelivery(MessageReference messageReference,
-                                AMQPMessage message,
-                                byte[] tag,
-                                ReadableBuffer sendBuffer) {
-      boolean releaseRequired = sendBuffer instanceof NettyReadable;
-      final Delivery delivery;
-      delivery = sender.delivery(tag, 0, tag.length);
-      delivery.setMessageFormat((int) message.getMessageFormat());
-      delivery.setContext(messageReference);
+   @Override
+   public void executeDelivery(MessageReference messageReference) {
 
       try {
+         AMQPMessage message = CoreAmqpConverter.checkAMQP(messageReference.getMessage());
 
-         if (releaseRequired) {
-            sender.send(sendBuffer);
-            // Above send copied, so release now if needed
-            releaseRequired = false;
-            ((NettyReadable) sendBuffer).getByteBuf().release();
-         } else {
-            // Don't have pooled content, no need to release or copy.
-            sender.sendNoCopy(sendBuffer);
-         }
+         sessionSPI.invokeOutgoing(message, (ActiveMQProtonRemotingConnection) sessionSPI.getTransportConnection().getProtocolConnection());
 
-         if (preSettle) {
-            // Presettled means the client implicitly accepts any delivery we send it.
-            try {
-               sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
-            } catch (Exception e) {
+         // Let the Message decide how to present the message bytes
+         ReadableBuffer sendBuffer = message.getSendBuffer(messageReference.getDeliveryCount());
+         // we only need a tag if we are going to settle later
+         byte[] tag = preSettle ? new byte[0] : protonSession.getTag();
 
+         boolean releaseRequired = sendBuffer instanceof NettyReadable;
+         final Delivery delivery;
+         delivery = sender.delivery(tag, 0, tag.length);
+         delivery.setMessageFormat((int) message.getMessageFormat());
+         delivery.setContext(messageReference);
+
+         try {
+
+            if (releaseRequired) {
+               sender.send(sendBuffer);
+               // Above send copied, so release now if needed
+               releaseRequired = false;
+               ((NettyReadable) sendBuffer).getByteBuf().release();
+            } else {
+               // Don't have pooled content, no need to release or copy.
+               sender.sendNoCopy(sendBuffer);
             }
-            delivery.settle();
-         } else {
-            sender.advance();
-         }
 
-         connection.flush();
-      } finally {
-         synchronized (creditsLock) {
-            pending.decrementAndGet();
+            if (preSettle) {
+               // Presettled means the client implicitly accepts any delivery we send it.
+               try {
+                  sessionSPI.ack(null, brokerConsumer, messageReference.getMessage());
+               } catch (Exception e) {
+                  log.debug(e.getMessage(), e);
+               }
+               delivery.settle();
+            } else {
+               sender.advance();
+            }
+
+            connection.flush();
+         } finally {
+            synchronized (creditsLock) {
+               pending.decrementAndGet();
+            }
+            if (releaseRequired) {
+               ((NettyReadable) sendBuffer).getByteBuf().release();
+            }
          }
-         if (releaseRequired) {
-            ((NettyReadable) sendBuffer).getByteBuf().release();
-         }
+      } catch (Exception e) {
+         log.warn(e.getMessage(), e);
+
+         // important todo: Error treatment
       }
    }
 
