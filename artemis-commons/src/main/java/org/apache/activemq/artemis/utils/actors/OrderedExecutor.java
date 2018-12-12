@@ -37,7 +37,7 @@ public class OrderedExecutor extends ProcessorBase<Runnable> implements ArtemisE
    private static final Logger logger = Logger.getLogger(OrderedExecutor.class);
 
    @Override
-   protected final void doTask(Runnable task) {
+   protected boolean doTask(Runnable task) {
       try {
          task.run();
       } catch (ActiveMQInterruptedException e) {
@@ -46,6 +46,8 @@ public class OrderedExecutor extends ProcessorBase<Runnable> implements ArtemisE
       } catch (Throwable t) {
          logger.warn(t.getMessage(), t);
       }
+
+      return true;
 
    }
 

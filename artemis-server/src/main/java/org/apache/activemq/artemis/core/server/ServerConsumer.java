@@ -106,5 +106,4 @@ public interface ServerConsumer extends Consumer, ConsumerInfo {
 
    String getSessionID();
 
-   void promptDelivery();
 }

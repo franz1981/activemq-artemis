@@ -43,6 +43,10 @@ public abstract class ProcessorBase<T> extends HandlerBase {
     */
    private final Runnable task = this::executePendingTasks;
 
+   protected Executor getDelegate() {
+      return delegate;
+   }
+
    // used by stateUpdater
    @SuppressWarnings("unused")
    private volatile int state = STATE_NOT_RUNNING;
@@ -63,7 +67,10 @@ public abstract class ProcessorBase<T> extends HandlerBase {
                //while the queue is not empty we process in order:
                //if requestedForcedShutdown==true than no new tasks will be drained from the tasks q.
                while (!requestedForcedShutdown && (task = tasks.poll()) != null) {
-                  doTask(task);
+                  if (!doTask(task)) {
+                     break;
+                  }
+
                }
             } finally {
                leave();
@@ -93,7 +100,7 @@ public abstract class ProcessorBase<T> extends HandlerBase {
    public void shutdown(long timeout, TimeUnit unit) {
       requestedShutdown = true;
 
-      if (!inHandler()) {
+      if (!inHandler(Thread.currentThread())) {
          // if it's in handler.. we just return
          flush(timeout, unit);
       }
@@ -108,7 +115,7 @@ public abstract class ProcessorBase<T> extends HandlerBase {
       requestedForcedShutdown = true;
       requestedShutdown = true;
 
-      if (inHandler()) {
+      if (inHandler(Thread.currentThread())) {
          stateUpdater.set(this, STATE_FORCED_SHUTDOWN);
       } else {
          //it could take a very long time depending on the current executing task
@@ -142,7 +149,7 @@ public abstract class ProcessorBase<T> extends HandlerBase {
       return pendingItems;
    }
 
-   protected abstract void doTask(T task);
+   protected abstract boolean doTask(T task);
 
    public ProcessorBase(Executor parent) {
       this.delegate = parent;
@@ -202,13 +209,17 @@ public abstract class ProcessorBase<T> extends HandlerBase {
    private void onAddedTaskIfNotRunning(int state) {
       if (state == STATE_NOT_RUNNING) {
          //startPoller could be deleted but is maintained because is inherited
-         delegate.execute(task);
+         runDelegate();
       } else if (state == STATE_FORCED_SHUTDOWN) {
          //help the GC by draining any task just submitted: it helps to cover the case of a shutdownNow finished before tasks.add
          synchronized (tasks) {
             tasks.clear();
          }
       }
+   }
+
+   protected void runDelegate() {
+      delegate.execute(task);
    }
 
    private static void logAddOnShutdown() {
