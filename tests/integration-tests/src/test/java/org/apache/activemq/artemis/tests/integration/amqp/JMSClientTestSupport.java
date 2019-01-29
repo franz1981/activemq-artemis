@@ -185,7 +185,7 @@ public abstract class JMSClientTestSupport extends AmqpClientTestSupport {
       return createCoreConnection(getBrokerCoreJMSConnectionString(), null, null, null, true);
    }
 
-   private Connection createCoreConnection(String connectionString, String username, String password, String clientId, boolean start) throws JMSException {
+   protected Connection createCoreConnection(String connectionString, String username, String password, String clientId, boolean start) throws JMSException {
       ActiveMQJMSConnectionFactory factory = new ActiveMQJMSConnectionFactory(connectionString);
 
       Connection connection = trackJMSConnection(factory.createConnection(username, password));

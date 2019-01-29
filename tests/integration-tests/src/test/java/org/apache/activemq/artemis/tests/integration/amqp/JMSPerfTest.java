@@ -17,28 +17,30 @@
 
 package org.apache.activemq.artemis.tests.integration.amqp;
 
+import java.io.PrintStream;
 import java.util.HashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import javax.jms.BytesMessage;
 import javax.jms.Connection;
 import javax.jms.DeliveryMode;
 import javax.jms.JMSException;
-import javax.jms.Message;
 import javax.jms.MessageConsumer;
 import javax.jms.MessageProducer;
 import javax.jms.Session;
-import javax.jms.TextMessage;
 
+import org.HdrHistogram.Histogram;
+import org.HdrHistogram.SingleWriterRecorder;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.jms.ActiveMQJMSConstants;
 import org.apache.activemq.artemis.core.remoting.impl.invm.TransportConstants;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.junit.Test;
+
+import static java.lang.String.format;
 
 public class JMSPerfTest extends JMSClientTestSupport {
 
@@ -60,7 +62,7 @@ public class JMSPerfTest extends JMSClientTestSupport {
       return "AMQP,OPENWIRE,CORE";
    }
 
-   private void testSharedDurableConsumer(Connection connection1, Connection connection2) throws JMSException {
+   private void testSharedDurableConsumer(Connection connection1, Connection connection2) throws JMSException, InterruptedException {
       try {
          for (int i = 0; i < 1; i++)
             testSharedDurableConsumer2(connection1, connection2);
@@ -70,108 +72,144 @@ public class JMSPerfTest extends JMSClientTestSupport {
       }
    }
 
-   private void testSharedDurableConsumer2(Connection connection1, Connection connection2) throws JMSException {
+   public enum OutputFormat {
+      LONG {
+         @Override
+         public void output(final Histogram histogram, PrintStream out, double outputScalingRatio) {
+            out.append(format("%-6s%20.2f%n", "mean", histogram.getMean() / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "min", histogram.getMinValue() / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "50.00%", histogram.getValueAtPercentile(50.0d) / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "90.00%", histogram.getValueAtPercentile(90.0d) / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "99.00%", histogram.getValueAtPercentile(99.0d) / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "99.90%", histogram.getValueAtPercentile(99.9d) / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "99.99%", histogram.getValueAtPercentile(99.99d) / outputScalingRatio));
+            out.append(format("%-6s%20.2f%n", "max", histogram.getMaxValue() / outputScalingRatio));
+            out.append(format("%-6s%20d%n", "count", histogram.getTotalCount()));
+         }
+      }, SHORT {
+         @Override
+         public void output(final Histogram histogram, final PrintStream out, double outputScalingRatio) {
+            out.append(format("%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%d%n", histogram.getMean() / outputScalingRatio, histogram.getMinValue() / outputScalingRatio, histogram.getValueAtPercentile(50.0d) / outputScalingRatio, histogram.getValueAtPercentile(90.0d) / outputScalingRatio, histogram.getValueAtPercentile(99.0d) / outputScalingRatio, histogram.getValueAtPercentile(99.9d) / outputScalingRatio, histogram.getValueAtPercentile(99.99d) / outputScalingRatio, histogram.getMaxValue() / outputScalingRatio, histogram.getTotalCount()));
+         }
+      }, DETAIL {
+         @Override
+         public void output(final Histogram histogram, final PrintStream out, double outputScalingRatio) {
+            histogram.outputPercentileDistribution(out, outputScalingRatio);
+         }
+      };
+
+      public abstract void output(final Histogram histogram, final PrintStream out, double outputScalingRatio);
+   }
+
+
+   private void testSharedDurableConsumer2(Connection connection1,
+                                           Connection connection2) throws JMSException, InterruptedException {
+      OutputFormat format = OutputFormat.LONG;
       ExecutorService executorService = Executors.newCachedThreadPool();
-      try {
+      connection1.start();
+      connection2.start();
 
-         connection1.start();
-         connection2.start();
+      int count = 10_000_000;
+      int producers = 1;
+      int consumers = producers * 2;
+      final long HIGHEST_TRACKABLE_VALUE = TimeUnit.MINUTES.toNanos(1);
+      final SingleWriterRecorder[] recorders = new SingleWriterRecorder[consumers];
+      final CountDownLatch consumersFinished = new CountDownLatch(consumers);
+      final CountDownLatch consumersStarted = new CountDownLatch(consumers);
+      for (int i = 0; i < consumers; i++) {
+         final int id = i;
+         recorders[id] = new SingleWriterRecorder(HIGHEST_TRACKABLE_VALUE, 2);
+         executorService.submit(() -> {
+            try {
+               final long totalMessagedToBeReceived = producers * count;
+               final SingleWriterRecorder recorder = recorders[id];
+               try (Session session2 = connection2.createSession(false, ActiveMQJMSConstants.PRE_ACKNOWLEDGE);
+                    MessageConsumer consumer1 = session2.createSharedDurableConsumer(session2.createTopic(getTopicName()), "SharedConsumer")) {
+                  consumersStarted.countDown();
+                  for (int r = 0; r < totalMessagedToBeReceived; r++) {
+                     BytesMessage message;
+                     while ((message = (BytesMessage) consumer1.receive(1000)) == null) {
 
-         AtomicBoolean running = new AtomicBoolean(true);
-
-         int count = 10_000_000;
-         int per = 10_000;
-         int producers = 1;
-         int consumers = producers * 2;
-
-         AtomicInteger counter = new AtomicInteger();
-         AtomicLong endTime = new AtomicLong(0);
-         long totalStart = System.nanoTime();
-         for (int i = 0; i < consumers; i++) {
-            executorService.submit(() -> {
-               long total = 0;
-               long num = 0;
-               try (Session session2 = connection2.createSession(false, ActiveMQJMSConstants.PRE_ACKNOWLEDGE); MessageConsumer consumer1 = session2.createSharedDurableConsumer(session2.createTopic(getTopicName()), "SharedConsumer")) {
-                  while (running.get()) {
-                     Message message1 = consumer1.receive(1000);
-                     if (message1 != null) {
-                        long end = System.nanoTime();
-                        long start = message1.getLongProperty("time");
-                        total = total + (end - start);
-                        num = num + 1;
-                        if (num % per == 0) {
-                           System.out.println("RESULT: " + TimeUnit.NANOSECONDS.toMicros(total / num));
-                           total = 0;
-                           num = 0;
-                        }
-                        if (counter.incrementAndGet() == count) {
-                           endTime.set(System.nanoTime());
-                        }
                      }
+                     long end = System.nanoTime();
+                     long start = message.readLong();
+                     recorder.recordValue(end - start);
                   }
-
-                  try {
-                     System.out.println("RESULT: " + TimeUnit.NANOSECONDS.toMicros(total / num));
-                  } catch (Throwable t) {
-                     System.out.println("eeel");
-                  }
-
-                  //               session2.unsubscribe("SharedConsumer");
-
                } catch (Exception e) {
                   System.out.println(e);
                }
+            } finally {
+               consumersFinished.countDown();
+            }
 
-            });
-         }
-
-         CountDownLatch countDownLatch = new CountDownLatch(producers);
-         for (int j = 0; j < producers; j++) {
-            executorService.submit(() -> {
-               try (Session session1 = connection1.createSession(false, Session.AUTO_ACKNOWLEDGE); MessageProducer producer = session1.createProducer(session1.createTopic(getTopicName()));) {
-                  producer.setDeliveryMode(DeliveryMode.PERSISTENT);
-                  int i = 0;
-                  while (i <= count) {
-                     try {
-                        TextMessage message = session1.createTextMessage("hello");
-                        message.setLongProperty("time", System.nanoTime());
-                        producer.send(message);
-                        i++;
-                        if (i % 10000 == 0 && i + 10000 > counter.get()) {
-                           try {
-                              Thread.sleep(1000);
-                           } catch (InterruptedException e) {
-                              e.printStackTrace();
-                           }
-                        }
-                     } catch (JMSException e) {
-                        System.out.println(e);
-                     }
-                  }
-               } catch (JMSException jmse) {
-                  jmse.printStackTrace();
-               } finally {
-                  countDownLatch.countDown();
+         });
+      }
+      consumersStarted.await();
+      final AtomicBoolean finished = new AtomicBoolean();
+      executorService.submit(()->{
+         final Histogram snapshots[] = new Histogram[consumers];
+         try {
+            while(!finished.get()) {
+               TimeUnit.SECONDS.sleep(1);
+               for (int i = 0; i < consumers; i++) {
+                  snapshots[i] = recorders[i].getIntervalHistogram(snapshots[i]);
                }
-
-            });
+               for (int i = 0; i< consumers; i ++) {
+                  final Histogram histogram = snapshots[i];
+                  if (histogram != null) {
+                     System.out.println("[" + (i + 1) + "] - us latencies:");
+                     //in us
+                     format.output(histogram, System.out, 1000d);
+                     System.out.println();
+                     snapshots[i] = histogram;
+                  } else {
+                     System.out.println("[" + (i + 1) + "] - us latencies: NOT AVAILABLE");
+                  }
+               }
+            }
+         } catch (InterruptedException e) {
+            e.printStackTrace();
          }
 
+      });
+      CountDownLatch producerFinished = new CountDownLatch(producers);
+      for (int j = 0; j < producers; j++) {
+         executorService.submit(() -> {
+            try (Session session1 = connection1.createSession(false, Session.AUTO_ACKNOWLEDGE);
+                 MessageProducer producer = session1.createProducer(session1.createTopic(getTopicName()))) {
+               producer.setDisableMessageID(true);
+               producer.setDisableMessageTimestamp(true);
+               final BytesMessage message = session1.createBytesMessage();
+               producer.setDeliveryMode(DeliveryMode.PERSISTENT);
+               for (int i = 0; i < count; i++) {
+                  try {
+                     message.clearBody();
+                     final long sendTime = System.nanoTime();
+                     message.writeLong(sendTime);
+                     producer.send(message);
+                     i++;
+                  } catch (JMSException e) {
+                     System.out.println(e);
+                  }
+               }
+            } catch (JMSException e) {
+               e.printStackTrace();
+            } finally {
+               producerFinished.countDown();
+            }
+         });
+
          try {
-            countDownLatch.await();
+            producerFinished.await();
          } catch (InterruptedException e) {
             e.printStackTrace();
          }
          try {
-            Thread.sleep(1000);
+            consumersFinished.await();
          } catch (InterruptedException e) {
             e.printStackTrace();
          }
-
-         long totalEnd = endTime.get() == 0 ? System.nanoTime() : endTime.get();
-
-         long cnt = counter.get();
-
+         finished.lazySet(true);
          executorService.shutdown();
          try {
             executorService.awaitTermination(1, TimeUnit.SECONDS);
@@ -179,10 +217,6 @@ public class JMSPerfTest extends JMSClientTestSupport {
             e.printStackTrace();
          }
          executorService.shutdownNow();
-
-      } finally {
-         //         connection1.close();
-         //         connection2.close();
       }
    }
 
