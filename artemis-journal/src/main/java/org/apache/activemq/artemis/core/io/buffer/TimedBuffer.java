@@ -21,7 +21,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.LockSupport;
 
@@ -34,7 +35,6 @@ import org.apache.activemq.artemis.core.journal.EncodingSupport;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 import org.apache.activemq.artemis.utils.critical.CriticalAnalyzer;
 import org.apache.activemq.artemis.utils.critical.CriticalComponentImpl;
-import org.jboss.logging.Logger;
 
 public final class TimedBuffer extends CriticalComponentImpl {
 
@@ -46,23 +46,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
    protected static final int CRITICAL_PATH_ADD_BYTES = 4;
    protected static final int CRITICAL_PATH_SET_OBSERVER = 5;
 
-   private static final Logger logger = Logger.getLogger(TimedBuffer.class);
-
-   private static final double MAX_TIMEOUT_ERROR_FACTOR = 1.5;
-
-   // Constants -----------------------------------------------------
-
-   // The number of tries on sleep before switching to spin
-   private static final int MAX_CHECKS_ON_SLEEP = 20;
-
-   // Attributes ----------------------------------------------------
-
    private TimedBufferObserver bufferObserver;
-
-   // If the TimedBuffer is idle - i.e. no records are being added, then it's pointless the timer flush thread
-   // in spinning and checking the time - and using up CPU in the process - this semaphore is used to
-   // prevent that
-   private final Semaphore spinLimiter = new Semaphore(1);
 
    private CheckTimer timerRunnable;
 
@@ -92,6 +76,11 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
    private final boolean logRates;
 
+   private final AtomicInteger bufferLock = new AtomicInteger(UNLOCKED);
+   private static final int UNLOCKED = 0;
+   private static final int LOCKED_BUFFER = 1;
+   private volatile Thread sleepingThread = null;
+
    private final AtomicLong bytesFlushed = new AtomicLong(0);
 
    private final AtomicLong flushesDone = new AtomicLong(0);
@@ -99,9 +88,6 @@ public final class TimedBuffer extends CriticalComponentImpl {
    private Timer logRatesTimer;
 
    private TimerTask logRatesTimerTask;
-
-   // no need to be volatile as every access is synchronized
-   private boolean spinning = false;
 
    // Static --------------------------------------------------------
 
@@ -137,16 +123,10 @@ public final class TimedBuffer extends CriticalComponentImpl {
    public void start() {
       enterCritical(CRITICAL_PATH_START);
       try {
-         synchronized (this) {
+         lockBuffer();
+         try {
             if (started) {
                return;
-            }
-
-            // Need to start with the spin limiter acquired
-            try {
-               spinLimiter.acquire();
-            } catch (InterruptedException e) {
-               throw new ActiveMQInterruptedException(e);
             }
 
             timerRunnable = new CheckTimer();
@@ -162,10 +142,33 @@ public final class TimedBuffer extends CriticalComponentImpl {
             }
 
             started = true;
+         } finally {
+            unlockBuffer();
          }
       } finally {
          leaveCritical(CRITICAL_PATH_START);
       }
+   }
+
+   private void lockBuffer() {
+      final int MAX_SPINS = 10;
+      int spins = 0;
+      final AtomicInteger bufferLock = this.bufferLock;
+      while (true) {
+         if (bufferLock.compareAndSet(UNLOCKED, LOCKED_BUFFER)) {
+            break;
+         }
+         if (spins < MAX_SPINS) {
+            spins++;
+         } else {
+            Thread.yield();
+         }
+      }
+   }
+
+   private void unlockBuffer() {
+      assert bufferLock.get() == LOCKED_BUFFER;
+      bufferLock.lazySet(UNLOCKED);
    }
 
    public void stop() {
@@ -173,19 +176,23 @@ public final class TimedBuffer extends CriticalComponentImpl {
       Thread localTimer = null;
       try {
          // add critical analyzer here.... <<<<
-         synchronized (this) {
+         lockBuffer();
+         try {
             try {
                if (!started) {
                   return;
                }
 
-               flush();
+               flushBatch();
 
                bufferObserver = null;
 
                timerRunnable.close();
 
-               spinLimiter.release();
+               final Thread sleepingThread = this.sleepingThread;
+               if (sleepingThread != null) {
+                  LockSupport.unpark(sleepingThread);
+               }
 
                if (logRates) {
                   logRatesTimerTask.cancel();
@@ -197,6 +204,8 @@ public final class TimedBuffer extends CriticalComponentImpl {
             } finally {
                started = false;
             }
+         } finally {
+            unlockBuffer();
          }
          if (localTimer != null) {
             while (localTimer.isAlive()) {
@@ -218,12 +227,15 @@ public final class TimedBuffer extends CriticalComponentImpl {
    public void setObserver(final TimedBufferObserver observer) {
       enterCritical(CRITICAL_PATH_SET_OBSERVER);
       try {
-         synchronized (this) {
+         lockBuffer();
+         try {
             if (bufferObserver != null) {
-               flush();
+               flushBatch();
             }
 
             bufferObserver = observer;
+         } finally {
+            unlockBuffer();
          }
       } finally {
          leaveCritical(CRITICAL_PATH_SET_OBSERVER);
@@ -238,7 +250,8 @@ public final class TimedBuffer extends CriticalComponentImpl {
    public boolean checkSize(final int sizeChecked) {
       enterCritical(CRITICAL_PATH_CHECK_SIZE);
       try {
-         synchronized (this) {
+         lockBuffer();
+         try {
             if (!started) {
                throw new IllegalStateException("TimedBuffer is not started");
             }
@@ -251,7 +264,7 @@ public final class TimedBuffer extends CriticalComponentImpl {
                // Either there is not enough space left in the buffer for the sized record
                // Or a flush has just been performed and we need to re-calculate bufferLimit
 
-               flush();
+               flushBatch();
 
                delayFlush = true;
 
@@ -273,6 +286,8 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
                return true;
             }
+         } finally {
+            unlockBuffer();
          }
       } finally {
          leaveCritical(CRITICAL_PATH_CHECK_SIZE);
@@ -282,7 +297,8 @@ public final class TimedBuffer extends CriticalComponentImpl {
    public void addBytes(final ActiveMQBuffer bytes, final boolean sync, final IOCallback callback) {
       enterCritical(CRITICAL_PATH_ADD_BYTES);
       try {
-         synchronized (this) {
+         lockBuffer();
+         try {
             if (!started) {
                throw new IllegalStateException("TimedBuffer is not started");
             }
@@ -299,19 +315,29 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
             if (sync) {
                pendingSync = true;
-
-               startSpin();
+               wakeupFlusherIfNeeded();
             }
+         } finally {
+            unlockBuffer();
          }
       } finally {
          leaveCritical(CRITICAL_PATH_ADD_BYTES);
       }
    }
 
+   private void wakeupFlusherIfNeeded() {
+      assert bufferLock.get() == LOCKED_BUFFER && pendingSync;
+      final Thread sleeping = sleepingThread;
+      if (sleeping != null) {
+         LockSupport.unpark(sleeping);
+      }
+   }
+
    public void addBytes(final EncodingSupport bytes, final boolean sync, final IOCallback callback) {
       enterCritical(CRITICAL_PATH_ADD_BYTES);
       try {
-         synchronized (this) {
+         lockBuffer();
+         try {
             if (!started) {
                throw new IllegalStateException("TimedBuffer is not started");
             }
@@ -324,9 +350,10 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
             if (sync) {
                pendingSync = true;
-
-               startSpin();
+               wakeupFlusherIfNeeded();
             }
+         } finally {
+            unlockBuffer();
          }
       } finally {
          leaveCritical(CRITICAL_PATH_ADD_BYTES);
@@ -334,8 +361,18 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
    }
 
-   public void flush() {
-      flushBatch();
+   public boolean flush() {
+      enterCritical(CRITICAL_PATH_FLUSH);
+      try {
+         lockBuffer();
+         try {
+            return flushBatch();
+         } finally {
+            unlockBuffer();
+         }
+      } finally {
+         leaveCritical(CRITICAL_PATH_FLUSH);
+      }
    }
 
    /**
@@ -343,59 +380,43 @@ public final class TimedBuffer extends CriticalComponentImpl {
     *
     * @return {@code true} when are flushed any bytes, {@code false} otherwise
     */
-   public boolean flushBatch() {
-      enterCritical(CRITICAL_PATH_FLUSH);
-      try {
-         synchronized (this) {
-            if (!started) {
-               throw new IllegalStateException("TimedBuffer is not started");
-            }
+   private boolean flushBatch() {
+      assert bufferLock.get() == LOCKED_BUFFER;
+      if (!started) {
+         throw new IllegalStateException("TimedBuffer is not started");
+      }
 
-            if (!delayFlush && buffer.writerIndex() > 0) {
-               int pos = buffer.writerIndex();
+      if (!delayFlush && buffer.writerIndex() > 0) {
+         int pos = buffer.writerIndex();
 
-               if (logRates) {
-                  bytesFlushed.addAndGet(pos);
-               }
-
-               final ByteBuffer bufferToFlush = bufferObserver.newBuffer(bufferSize, pos);
-               //bufferObserver::newBuffer doesn't necessary return a buffer with limit == pos or limit == bufferSize!!
-               bufferToFlush.limit(pos);
-               //perform memcpy under the hood due to the off heap buffer
-               buffer.getBytes(0, bufferToFlush);
-
-               bufferObserver.flushBuffer(bufferToFlush, pendingSync, callbacks);
-
-               stopSpin();
-
-               pendingSync = false;
-
-               // swap the instance as the previous callback list is being used asynchronously
-               callbacks = new ArrayList<>();
-
-               buffer.clear();
-
-               bufferLimit = 0;
-
-               flushesDone.incrementAndGet();
-
-               return pos > 0;
-            } else {
-               return false;
-            }
+         if (logRates) {
+            bytesFlushed.addAndGet(pos);
          }
-      } finally {
-         leaveCritical(CRITICAL_PATH_FLUSH);
+
+         final ByteBuffer bufferToFlush = bufferObserver.newBuffer(bufferSize, pos);
+         //bufferObserver::newBuffer doesn't necessary return a buffer with limit == pos or limit == bufferSize!!
+         bufferToFlush.limit(pos);
+         //perform memcpy under the hood due to the off heap buffer
+         buffer.getBytes(0, bufferToFlush);
+
+         bufferObserver.flushBuffer(bufferToFlush, pendingSync, callbacks);
+
+         pendingSync = false;
+
+         // swap the instance as the previous callback list is being used asynchronously
+         callbacks = new ArrayList<>();
+
+         buffer.clear();
+
+         bufferLimit = 0;
+
+         flushesDone.incrementAndGet();
+
+         return pos > 0;
+      } else {
+         return false;
       }
    }
-
-   // Package protected ---------------------------------------------
-
-   // Protected -----------------------------------------------------
-
-   // Private -------------------------------------------------------
-
-   // Inner classes -------------------------------------------------
 
    private class LogRatesTimerTask extends TimerTask {
 
@@ -442,14 +463,11 @@ public final class TimedBuffer extends CriticalComponentImpl {
 
       private volatile boolean closed = false;
 
-      int checks = 0;
-      int failedChecks = 0;
-
       @Override
       public void run() {
-         long lastFlushTime = System.nanoTime();
-         boolean useSleep = true;
-
+         final Thread currentThread = Thread.currentThread();
+         final long timeout = TimedBuffer.this.timeout;
+         long lastFlushTime;
          while (!closed) {
             // We flush on the timer if there are pending syncs there and we've waited at least one
             // timeout since the time of the last flush.
@@ -457,71 +475,32 @@ public final class TimedBuffer extends CriticalComponentImpl {
             // On the timeout verification, notice that we ignore the timeout check if we are using sleep
 
             if (pendingSync) {
-               if (useSleep) {
-                  // if using sleep, we will always flush
-                  lastFlushTime = System.nanoTime();
-                  if (flushBatch()) {
-                     //it could wait until the timeout is expired
-                     final long timeFromTheLastFlush = System.nanoTime() - lastFlushTime;
+               lastFlushTime = System.nanoTime();
+               if (flush()) {
+                  //it could wait until the timeout is expired
+                  // example: Say the device took 20% of the time to write..
+                  //          We only need to wait 80% more..
+                  //          And if the device took more than that time, there's no need to wait at all.
+                  final long deadLine = lastFlushTime + timeout;
+                  sleepUntil(deadLine);
+               }
+            }
 
-                     // example: Say the device took 20% of the time to write..
-                     //          We only need to wait 80% more..
-                     //          timeFromTheLastFlush would be the difference
-                     //          And if the device took more than that time, there's no need to wait at all.
-                     final long timeToSleep = timeout - timeFromTheLastFlush;
-                     if (timeToSleep > 0) {
-                        useSleep = sleepIfPossible(timeToSleep);
+            //we could park here if there are no pendingSyncs
+            if (!pendingSync) {
+               sleepingThread = currentThread;
+               try {
+                  if (!pendingSync) {
+                     LockSupport.park();
+                     if (currentThread.isInterrupted()) {
+                        throw new ActiveMQInterruptedException(new InterruptedException());
                      }
                   }
-               } else if (bufferObserver != null && System.nanoTime() - lastFlushTime > timeout) {
-                  lastFlushTime = System.nanoTime();
-                  // if not using flush we will spin and do the time checks manually
-                  flush();
+               } finally {
+                  sleepingThread = null;
                }
-            }
-
-            try {
-               spinLimiter.acquire();
-
-               Thread.yield();
-
-               spinLimiter.release();
-            } catch (InterruptedException e) {
-               throw new ActiveMQInterruptedException(e);
             }
          }
-      }
-
-      /**
-       * We will attempt to use sleep only if the system supports nano-sleep.
-       * we will on that case verify up to MAX_CHECKS if nano sleep is behaving well.
-       * if more than 50% of the checks have failed we will cancel the sleep and just use regular spin
-       */
-      private boolean sleepIfPossible(long nanosToSleep) {
-         boolean useSleep = true;
-         try {
-            final long startSleep = System.nanoTime();
-            sleep(nanosToSleep);
-            if (checks < MAX_CHECKS_ON_SLEEP) {
-               final long elapsedSleep = System.nanoTime() - startSleep;
-               // I'm letting the real time to be up to 50% than the requested sleep.
-               if (elapsedSleep > (nanosToSleep * MAX_TIMEOUT_ERROR_FACTOR)) {
-                  failedChecks++;
-               }
-
-               if (++checks >= MAX_CHECKS_ON_SLEEP) {
-                  if (failedChecks > MAX_CHECKS_ON_SLEEP * 0.5) {
-                     logger.debug("LockSupport.parkNanos with nano seconds is not working as expected, Your kernel possibly doesn't support real time. the Journal TimedBuffer will spin for timeouts");
-                     useSleep = false;
-                  }
-               }
-            }
-         } catch (Exception e) {
-            useSleep = false;
-            // I don't think we need to individualize a logger code here, this is unlikely to happen anyways
-            logger.warn(e.getMessage() + ", disabling sleep on TimedBuffer, using spin now", e);
-         }
-         return useSleep;
       }
 
       public void close() {
@@ -529,41 +508,21 @@ public final class TimedBuffer extends CriticalComponentImpl {
       }
    }
 
-   /**
-    * Sub classes (tests basically) can use this to override how the sleep is being done
-    *
-    * @param sleepNanos
-    * @throws InterruptedException
-    */
-   protected void sleep(long sleepNanos) {
-      LockSupport.parkNanos(sleepNanos);
-   }
+   private static final long MINIMUM_SLEEP_NANOS = TimeUnit.MILLISECONDS.toNanos(1);
+   private static final long MINIMUM_YIELD_NANOS = TimeUnit.MICROSECONDS.toNanos(10);
 
-   /**
-    * Sub classes (tests basically) can use this to override disabling spinning
-    */
-   protected void stopSpin() {
-      if (spinning) {
-         try {
-            // We acquire the spinLimiter semaphore - this prevents the timer flush thread unnecessarily spinning
-            // when the buffer is inactive
-            spinLimiter.acquire();
-         } catch (InterruptedException e) {
-            throw new ActiveMQInterruptedException(e);
+   private static void sleepUntil(long deadLine) {
+      while (true) {
+         final long toSleep = deadLine - System.nanoTime();
+         if (toSleep <= 0) {
+            return;
          }
-
-         spinning = false;
-      }
-   }
-
-   /**
-    * Sub classes (tests basically) can use this to override disabling spinning
-    */
-   protected void startSpin() {
-      if (!spinning) {
-         spinLimiter.release();
-
-         spinning = true;
+         if (toSleep > MINIMUM_SLEEP_NANOS) {
+            //do not trust parks and let it sleep only half of the expected time
+            LockSupport.parkNanos(toSleep >> 1);
+         } else if (toSleep > MINIMUM_YIELD_NANOS) {
+            Thread.yield();
+         }
       }
    }
 
