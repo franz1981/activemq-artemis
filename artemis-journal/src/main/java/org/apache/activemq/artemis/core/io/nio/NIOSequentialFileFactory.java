@@ -17,13 +17,24 @@
 package org.apache.activemq.artemis.core.io.nio;
 
 import java.io.File;
+import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 
 import io.netty.util.internal.PlatformDependent;
 import org.apache.activemq.artemis.ArtemisConstants;
+import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
+import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.core.io.AbstractSequentialFileFactory;
+import org.apache.activemq.artemis.core.io.DelegateCallback;
+import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.utils.Env;
@@ -37,6 +48,23 @@ public class NIOSequentialFileFactory extends AbstractSequentialFileFactory {
 
    //pools only the biggest one -> optimized for the common case
    private final ThreadLocal<ByteBuffer> bytesPool;
+   private final Semaphore ioQueue;
+   private final BlockingQueue<IOTask> ioTasks;
+   private final List<IOCallback> syncCallbacks;
+   private volatile boolean executingIOTasks = false;
+
+   private static final class IOTask {
+
+      final SequentialFile file;
+      final boolean sync;
+      final IOCallback callback;
+
+      IOTask(SequentialFile file, boolean sync, IOCallback callback) {
+         this.file = file;
+         this.sync = sync;
+         this.callback = callback;
+      }
+   }
 
    public NIOSequentialFileFactory(final File journalDir, final int maxIO) {
       this(journalDir, null, maxIO);
@@ -77,6 +105,15 @@ public class NIOSequentialFileFactory extends AbstractSequentialFileFactory {
       super(journalDir, buffered, bufferSize, bufferTimeout, maxIO, logRates, listener, analyzer);
       this.bufferPooling = true;
       this.bytesPool = new ThreadLocal<>();
+      if (isSupportsCallbacks() && maxIO > 0) {
+         ioQueue = new Semaphore(maxIO);
+         ioTasks = new ArrayBlockingQueue<>(maxIO);
+         syncCallbacks = new ArrayList<>(maxIO);
+      } else {
+         ioQueue = null;
+         ioTasks = null;
+         syncCallbacks = null;
+      }
    }
 
    public static ByteBuffer allocateDirectByteBuffer(final int size) {
@@ -157,6 +194,91 @@ public class NIOSequentialFileFactory extends AbstractSequentialFileFactory {
          }
          byteBuffer.limit(size);
          return byteBuffer;
+      }
+   }
+
+   boolean waitAllPendingIOTasks(long timeout, TimeUnit timeUnit) throws InterruptedException {
+      if (ioQueue == null) {
+         return true;
+      }
+      final boolean acquired = ioQueue.tryAcquire(maxIO, timeout, timeUnit);
+      if (acquired) {
+         ioQueue.release(maxIO);
+      }
+      return acquired;
+   }
+
+   void submitIOTask(NIOSequentialFile file, boolean sync, IOCallback callback) throws InterruptedException {
+      if (ioQueue != null) {
+         ioQueue.acquire();
+         ioTasks.put(new IOTask(file, sync, callback));
+         if (!executingIOTasks) {
+            writeExecutor.execute(() -> {
+               while (!ioTasks.isEmpty()) {
+                  executingIOTasks = true;
+                  SequentialFile lastSyncFile = null;
+                  final List<IOCallback> syncCallbacks = this.syncCallbacks;
+                  IOTask ioTask;
+                  while ((ioTask = ioTasks.poll()) != null) {
+                     //NOTE on the batching strategy:
+                     //it will try to batch consecutive sync requests on the same file until:
+                     //- !sync operation
+                     //- different file task
+                     if (lastSyncFile != ioTask.file || !ioTask.sync) {
+                        if (lastSyncFile != null) {
+                           final int batchSize = syncCallbacks.size();
+                           try {
+                              runIOTask(lastSyncFile, true, batchSize == 1 ? syncCallbacks.get(0) : new DelegateCallback(syncCallbacks));
+                           } finally {
+                              ioQueue.release(batchSize);
+                              syncCallbacks.clear();
+                              lastSyncFile = null;
+                           }
+                        }
+                     }
+                     if (ioTask.sync) {
+                        lastSyncFile = file;
+                        syncCallbacks.add(ioTask.callback);
+                     } else {
+                        try {
+                           runIOTask(ioTask.file, false, ioTask.callback);
+                        } finally {
+                           ioQueue.release();
+                        }
+                     }
+                  }
+                  if (lastSyncFile != null) {
+                     final int batchSize = syncCallbacks.size();
+                     try {
+                        runIOTask(lastSyncFile, true, batchSize == 1 ? syncCallbacks.get(0) : new DelegateCallback(syncCallbacks));
+                     } finally {
+                        ioQueue.release(batchSize);
+                        syncCallbacks.clear();
+                     }
+                  }
+                  executingIOTasks = false;
+               }
+            });
+         }
+      } else {
+         runIOTask(file, sync, callback);
+      }
+   }
+
+   private void runIOTask(SequentialFile file, boolean sync, IOCallback callback) {
+      try {
+         if (sync) {
+            file.sync();
+         }
+
+         if (callback != null) {
+            callback.done();
+         }
+      } catch (IOException e) {
+         callback.onError(ActiveMQExceptionType.IO_ERROR.getCode(), e.getMessage());
+         onIOError(new ActiveMQIOErrorException(e.getMessage(), e), e.getMessage(), file);
+      } catch (Throwable t) {
+         callback.onError(ActiveMQExceptionType.GENERIC_EXCEPTION.getCode(), t.getMessage());
       }
    }
 

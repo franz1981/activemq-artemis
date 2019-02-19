@@ -18,12 +18,15 @@ package org.apache.activemq.artemis.core.io.nio;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.nio.ByteBuffer;
 import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 
 import io.netty.buffer.ByteBuf;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -36,6 +39,7 @@ import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
 import org.apache.activemq.artemis.core.io.buffer.TimedBufferObserver;
+import org.apache.activemq.artemis.core.journal.impl.SimpleWaitIOCallback;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
 import org.apache.activemq.artemis.utils.Env;
@@ -133,19 +137,42 @@ public class NIOSequentialFile extends AbstractSequentialFile {
    public synchronized void close() throws IOException, InterruptedException, ActiveMQException {
       super.close();
 
-      try {
-         if (channel != null) {
-            channel.close();
-         }
-      } catch (ClosedChannelException e) {
-         throw e;
-      } catch (IOException e) {
-         factory.onIOError(new ActiveMQIOErrorException(e.getMessage(), e), e.getMessage(), this);
-         throw e;
-      }
-      channel = null;
+      if (channel != null) {
+         try {
+            if (factory.isSupportsCallbacks() && maxIO > 0) {
+               final NIOSequentialFileFactory factory = (NIOSequentialFileFactory)this.factory;
+               int waitCount = 0;
+               while (!factory.waitAllPendingIOTasks(10, TimeUnit.SECONDS)) {
+                  waitCount++;
+                  if (waitCount == 1) {
+                     final ThreadInfo[] threads = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+                     for (ThreadInfo threadInfo : threads) {
+                        ActiveMQJournalLogger.LOGGER.warn(threadInfo.toString());
+                     }
+                     factory.onIOError(new IOException("Timeout on close"), "Timeout on close", this);
+                  }
+                  ActiveMQJournalLogger.LOGGER.warn("waiting pending callbacks on " + getFileName() + " from " + (waitCount * 10) + " seconds!");
+               }
+            }
+         } catch (InterruptedException e) {
+            ActiveMQJournalLogger.LOGGER.warn("interrupted while waiting pending callbacks on " + getFileName());
+            throw e;
+         } finally {
+            try {
+               if (channel != null) {
+                  channel.close();
+               }
+            } catch (ClosedChannelException e) {
+               throw e;
+            } catch (IOException e) {
+               factory.onIOError(new ActiveMQIOErrorException(e.getMessage(), e), e.getMessage(), this);
+               throw e;
+            }
+            channel = null;
 
-      notifyAll();
+            notifyAll();
+         }
+      }
    }
 
    @Override
@@ -232,7 +259,7 @@ public class NIOSequentialFile extends AbstractSequentialFile {
 
    @Override
    public SequentialFile cloneFile() {
-      return new NIOSequentialFile(factory, directory, getFileName(), maxIO, null);
+      return new NIOSequentialFile((NIOSequentialFileFactory) factory, directory, getFileName(), maxIO, null);
    }
 
    @Override
@@ -295,13 +322,17 @@ public class NIOSequentialFile extends AbstractSequentialFile {
     * @param bytes
     * @param sync
     * @param callback
-    * @throws IOException
+    * @throws IOExceptionPde
     * @throws Exception
     */
    private void doInternalWrite(final ByteBuffer bytes,
                                 final boolean sync,
                                 final IOCallback callback,
                                 boolean releaseBuffer) throws IOException {
+      if (factory.isSupportsCallbacks() && maxIO > 0) {
+         doAsyncInternalWrite(bytes, sync, callback, releaseBuffer);
+         return;
+      }
       try {
          channel.write(bytes);
 
@@ -317,6 +348,43 @@ public class NIOSequentialFile extends AbstractSequentialFile {
             //release it to recycle the write buffer if big enough
             this.factory.releaseBuffer(bytes);
          }
+      }
+   }
+
+   private void doAsyncInternalWrite(final ByteBuffer bytes,
+                                     final boolean sync,
+                                     final IOCallback callback,
+                                     boolean releaseBuffer) throws IOException {
+      assert maxIO > 0;
+      try {
+         try {
+            channel.write(bytes);
+         } finally {
+            if (releaseBuffer) {
+               this.factory.releaseBuffer(bytes);
+            }
+         }
+
+         if (sync || callback != null) {
+            final SimpleWaitIOCallback waitIOCallback;
+            final IOCallback ioCallback;
+            //sync force to wait I/O completion
+            if (sync && callback == null) {
+               waitIOCallback = new SimpleWaitIOCallback();
+               ioCallback = waitIOCallback;
+            } else {
+               waitIOCallback = null;
+               ioCallback = callback;
+            }
+            ((NIOSequentialFileFactory) factory).submitIOTask(this, sync, ioCallback);
+            if (waitIOCallback != null) {
+               waitIOCallback.waitCompletion();
+            }
+         }
+      } catch (InterruptedException e) {
+         this.factory.onIOError(e, "interrupted while waiting on the I/O queue", this);
+      } catch (ActiveMQException e) {
+         factory.onIOError(e, e.getMessage(), this);
       }
    }
 
