@@ -237,7 +237,7 @@ public class NIOSequentialFileFactory extends AbstractSequentialFileFactory {
                         }
                      }
                      if (ioTask.sync) {
-                        lastSyncFile = file;
+                        lastSyncFile = ioTask.file;
                         syncCallbacks.add(ioTask.callback);
                      } else {
                         try {
