@@ -335,6 +335,7 @@ public class BackupSyncJournalTest extends FailoverTestBase {
       liveServer.getServer().locateQueue(ADDRESS).setPurgeOnNoConsumers(purgeOnNoConsumers);
       assertEquals(n_msgs, ((QueueControl) liveServer.getServer().getManagementService().getResource(ResourceNames.QUEUE + ADDRESS.toString())).removeAllMessages());
       startBackupCrashLive();
+      assertEquals(0, ((QueueControl) backupServer.getServer().getManagementService().getResource(ResourceNames.QUEUE + ADDRESS.toString())).getMessageCount());
       assertNoMoreMessages();
    }
 
