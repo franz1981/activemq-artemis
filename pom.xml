@@ -75,7 +75,7 @@
       <staging.siteURL>scp://people.apache.org/x1/www/activemq.apache.org</staging.siteURL>
 
       <activemq-artemis-native-version>1.0.0</activemq-artemis-native-version>
-      <karaf.version>4.0.6</karaf.version>
+      <karaf.version>4.2.3</karaf.version>
       <pax.exam.version>4.9.1</pax.exam.version>
       <commons.config.version>2.4</commons.config.version>
       <commons.lang.version>3.0</commons.lang.version>
