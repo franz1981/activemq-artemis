@@ -30,9 +30,7 @@ import io.aeron.driver.ThreadingMode;
 import io.aeron.logbuffer.Header;
 import io.aeron.shadow.org.HdrHistogram.Histogram;
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
-import io.netty.buffer.UnpooledUnsafeDirectByteBuf;
 import org.agrona.DirectBuffer;
 import org.agrona.concurrent.UnsafeBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -114,10 +112,15 @@ public class CreateQueueTest extends ActiveMQTestBase {
                      }
                   }
                   synchronized (System.out) {
-                     System.out.println("RESPONSE TIME in us");
-                     HISTOGRAM.outputPercentileDistribution(System.out, 1000d);
+                     System.out.println("[" + (t+1) +"] - RESPONSE TIME in us");
+                     responseTime.outputPercentileDistribution(System.out, 1000d);
                   }
-                  HISTOGRAM.reset();
+                  synchronized (System.out) {
+                     System.out.println("[" + (t+1) +"] - DECODE TIME in us");
+                     decodeTime.outputPercentileDistribution(System.out, 1000d);
+                  }
+                  responseTime.reset();
+                  decodeTime.reset();
                   finishedTests[t].countDown();
                }
             });
@@ -162,12 +165,12 @@ public class CreateQueueTest extends ActiveMQTestBase {
                final long elapsed = System.nanoTime() - start;
                System.out.println(messages * 1000_000_000L / elapsed + " msg/sec");
                synchronized (System.out) {
-                  System.out.println("WAIT TIME in us");
+                  System.out.println("[" + (t+1) +"] - WAIT TIME in us");
                   waitTime.outputPercentileDistribution(System.out, 1000d);
                }
                waitTime.reset();
                synchronized (System.out) {
-                  System.out.println("ENCODE TIME in us");
+                  System.out.println("[" + (t+1) +"] - ENCODE TIME in us");
                   encodeTime.outputPercentileDistribution(System.out, 1000d);
                }
                encodeTime.reset();
@@ -183,7 +186,8 @@ public class CreateQueueTest extends ActiveMQTestBase {
       }
    }
 
-   private final static Histogram HISTOGRAM = new Histogram(TimeUnit.MINUTES.toNanos(2),2);
+   private final static Histogram responseTime = new Histogram(TimeUnit.MINUTES.toNanos(2), 2);
+   private final static Histogram decodeTime = new Histogram(TimeUnit.MINUTES.toNanos(2), 2);
    private final static CoreMessageObjectPools pools = new CoreMessageObjectPools();
 
    private static void onFragmentReceived(DirectBuffer buffer, int offset, int length, Header header) {
@@ -195,7 +199,9 @@ public class CreateQueueTest extends ActiveMQTestBase {
       final CoreMessage arrivedMessage = new CoreMessage(pools);
       arrivedMessage.receiveBuffer(unpooledBytes);
       final long elapsed = arrived - arrivedMessage.getLongProperty("t");
-      HISTOGRAM.recordValue(elapsed);
+      final long elapsedCopuAndDecoding = System.nanoTime() - arrived;
+      decodeTime.recordValue(elapsedCopuAndDecoding);
+      responseTime.recordValue(elapsed);
    }
 
    @Test
