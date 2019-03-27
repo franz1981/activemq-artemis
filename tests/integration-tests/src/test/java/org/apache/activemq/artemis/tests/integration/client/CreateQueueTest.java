@@ -20,6 +20,7 @@ import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import io.aeron.Aeron;
 import io.aeron.ExclusivePublication;
@@ -27,7 +28,9 @@ import io.aeron.Subscription;
 import io.aeron.driver.MediaDriver;
 import io.aeron.driver.ThreadingMode;
 import io.aeron.logbuffer.Header;
+import io.aeron.shadow.org.HdrHistogram.Histogram;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
 import io.netty.buffer.Unpooled;
 import io.netty.buffer.UnpooledUnsafeDirectByteBuf;
 import org.agrona.DirectBuffer;
@@ -40,6 +43,7 @@ import org.apache.activemq.artemis.api.core.client.ClientSession;
 import org.apache.activemq.artemis.api.core.client.ClientSessionFactory;
 import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.core.message.impl.CoreMessage;
+import org.apache.activemq.artemis.core.message.impl.CoreMessageObjectPools;
 import org.apache.activemq.artemis.core.postoffice.impl.AeronConnector;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
@@ -73,9 +77,9 @@ public class CreateQueueTest extends ActiveMQTestBase {
 
    @Test
    public void sendReceiveWithAeron() throws InterruptedException {
-      final boolean IPC = true;
+      final boolean IPC = false;
       final int tests = 20;
-      final int messages = 500_000;
+      final int messages = 100_000;
       final MediaDriver.Context context = new MediaDriver.Context();
       MediaDriver mediaDriver = null;
       if (!IPC) {
@@ -109,6 +113,8 @@ public class CreateQueueTest extends ActiveMQTestBase {
                         remaining -= polled;
                      }
                   }
+                  HISTOGRAM.outputPercentileDistribution(System.out, 1000d);
+                  HISTOGRAM.reset();
                   finishedTests[t].countDown();
                }
             });
@@ -131,6 +137,7 @@ public class CreateQueueTest extends ActiveMQTestBase {
                   msg.setRoutingType(RoutingType.ANYCAST);
                   msg.setAddress("aeron.queue");
                   msg.putBytesProperty("bytes", bytes);
+                  msg.putLongProperty("t", System.nanoTime());
                   final int encodeSize = msg.getEncodeSize();
                   sentMessageBuffer.wrap(sentBuffer.array(), sentBuffer.arrayOffset(), encodeSize);
                   try {
@@ -144,7 +151,7 @@ public class CreateQueueTest extends ActiveMQTestBase {
                finishedTests[t].await();
                final long elapsed = System.nanoTime() - start;
                System.out.println(messages * 1000_000_000L / elapsed + " msg/sec");
-               Thread.sleep(1000);
+               Thread.sleep(2000);
             }
          }
       } catch (Throwable t) {
@@ -156,8 +163,19 @@ public class CreateQueueTest extends ActiveMQTestBase {
       }
    }
 
-   private static void onFragmentReceived(DirectBuffer buffer, int offset, int length, Header header) {
+   private final static Histogram HISTOGRAM = new Histogram(TimeUnit.MINUTES.toNanos(2),2);
+   private final static CoreMessageObjectPools pools = new CoreMessageObjectPools();
 
+   private static void onFragmentReceived(DirectBuffer buffer, int offset, int length, Header header) {
+      final long arrived = System.nanoTime();
+      final ByteBuf unpooledBytes = Unpooled.buffer(length, length);
+      unpooledBytes.ensureWritable(length);
+      buffer.getBytes(offset, unpooledBytes.array(), 0, length);
+      unpooledBytes.writerIndex(length);
+      final CoreMessage arrivedMessage = new CoreMessage(pools);
+      arrivedMessage.receiveBuffer(unpooledBytes);
+      final long elapsed = arrived - arrivedMessage.getLongProperty("t");
+      HISTOGRAM.recordValue(elapsed);
    }
 
    @Test

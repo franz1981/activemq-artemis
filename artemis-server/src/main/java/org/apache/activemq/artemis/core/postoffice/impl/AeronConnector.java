@@ -49,10 +49,10 @@ import org.apache.activemq.artemis.core.server.Queue;
 public final class AeronConnector implements AutoCloseable {
 
    public static final String EMBEDDED_DIR_NAME = "/dev/shm/broker";
-   //public static final String INCOMING_CHANNEL = "aeron:udp?endpoint=localhost:40123";
-   public static final String INCOMING_CHANNEL = CommonContext.IPC_CHANNEL;
-   //public static final String OUTGOING_CHANNEL = "aeron:udp?endpoint=localhost:40124";
-   public static final String OUTGOING_CHANNEL = CommonContext.IPC_CHANNEL;
+   public static final String INCOMING_CHANNEL = "aeron:udp?endpoint=localhost:40123";
+   //public static final String INCOMING_CHANNEL = CommonContext.IPC_CHANNEL;
+   public static final String OUTGOING_CHANNEL = "aeron:udp?endpoint=localhost:40124";
+   //public static final String OUTGOING_CHANNEL = CommonContext.IPC_CHANNEL;
    public static final int INCOMING_STREAM_ID = 1;
    public static final int OUTGOING_STREAM_ID = 2;
    private final MediaDriver mediaDriver;
