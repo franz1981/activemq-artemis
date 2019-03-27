@@ -136,7 +136,7 @@ public class CreateQueueTest extends ActiveMQTestBase {
             for (int t = 0; t < tests; t++) {
                final long start = System.nanoTime();
                for (int m = 0; m < messages; m++) {
-                  final CoreMessage msg = new CoreMessage();
+                  final CoreMessage msg = new CoreMessage(pools);
                   sentBuffer.clear();
                   msg.setBuffer(sentBuffer);
                   msg.setMessageID(msgId);
