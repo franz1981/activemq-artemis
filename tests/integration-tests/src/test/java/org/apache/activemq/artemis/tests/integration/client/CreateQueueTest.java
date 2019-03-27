@@ -113,7 +113,10 @@ public class CreateQueueTest extends ActiveMQTestBase {
                         remaining -= polled;
                      }
                   }
-                  HISTOGRAM.outputPercentileDistribution(System.out, 1000d);
+                  synchronized (System.out) {
+                     System.out.println("RESPONSE TIME in us");
+                     HISTOGRAM.outputPercentileDistribution(System.out, 1000d);
+                  }
                   HISTOGRAM.reset();
                   finishedTests[t].countDown();
                }
@@ -125,6 +128,8 @@ public class CreateQueueTest extends ActiveMQTestBase {
             consumerThreads.start();
             startedConsumer.await();
             long msgId = 1;
+            final Histogram waitTime = new Histogram(TimeUnit.MINUTES.toNanos(2), 2);
+            final Histogram encodeTime = new Histogram(TimeUnit.MINUTES.toNanos(2), 2);
             for (int t = 0; t < tests; t++) {
                final long start = System.nanoTime();
                for (int m = 0; m < messages; m++) {
@@ -138,12 +143,17 @@ public class CreateQueueTest extends ActiveMQTestBase {
                   msg.setAddress("aeron.queue");
                   msg.putBytesProperty("bytes", bytes);
                   msg.putLongProperty("t", System.nanoTime());
+                  final long startEncode = System.nanoTime();
                   final int encodeSize = msg.getEncodeSize();
                   sentMessageBuffer.wrap(sentBuffer.array(), sentBuffer.arrayOffset(), encodeSize);
                   try {
+                     final long startOffer = System.nanoTime();
                      while (publication.offer(sentMessageBuffer) < 0) {
                         Thread.yield();
                      }
+                     final long elapsedOffer = System.nanoTime() - startOffer;
+                     waitTime.recordValue(elapsedOffer);
+                     encodeTime.recordValue(startOffer - startEncode);
                   } finally {
                      sentMessageBuffer.wrap(0, 0);
                   }
@@ -151,6 +161,16 @@ public class CreateQueueTest extends ActiveMQTestBase {
                finishedTests[t].await();
                final long elapsed = System.nanoTime() - start;
                System.out.println(messages * 1000_000_000L / elapsed + " msg/sec");
+               synchronized (System.out) {
+                  System.out.println("WAIT TIME in us");
+                  waitTime.outputPercentileDistribution(System.out, 1000d);
+               }
+               waitTime.reset();
+               synchronized (System.out) {
+                  System.out.println("ENCODE TIME in us");
+                  encodeTime.outputPercentileDistribution(System.out, 1000d);
+               }
+               encodeTime.reset();
                Thread.sleep(2000);
             }
          }
