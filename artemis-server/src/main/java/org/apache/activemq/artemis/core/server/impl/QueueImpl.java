@@ -878,7 +878,7 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
    }
 
    @Override
-   public void addTail(final MessageReference ref, final boolean direct) {
+   public void addTail(MessageReference ref, boolean direct, boolean endOfBatch) {
       enterCritical(CRITICAL_PATH_ADD_TAIL);
       try {
          if (scheduleIfPossible(ref)) {
@@ -925,11 +925,18 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
 
          directDeliver = false;
 
-         // Delivery async will both poll for intermediate reference and deliver to clients
-         deliverAsync();
+         if (endOfBatch) {
+            // Delivery async will both poll for intermediate reference and deliver to clients
+            deliverAsync();
+         }
       } finally {
          leaveCritical(CRITICAL_PATH_ADD_TAIL);
       }
+   }
+
+   @Override
+   public void addTail(final MessageReference ref, final boolean direct) {
+      addTail(ref, direct, true);
    }
 
    protected boolean scheduleIfPossible(MessageReference ref) {

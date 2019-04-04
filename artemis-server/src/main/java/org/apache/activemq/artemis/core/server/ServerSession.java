@@ -263,6 +263,13 @@ public interface ServerSession extends SecurityAuth {
                       boolean noAutoCreateQueue,
                       RoutingContext routingContext) throws Exception;
 
+   RoutingStatus send(Transaction tx,
+                      Message message,
+                      boolean direct,
+                      boolean noAutoCreateQueue,
+                      RoutingContext routingContext,
+                      boolean endOfBatch) throws Exception;
+
 
    RoutingStatus doSend(Transaction tx,
                         Message msg,

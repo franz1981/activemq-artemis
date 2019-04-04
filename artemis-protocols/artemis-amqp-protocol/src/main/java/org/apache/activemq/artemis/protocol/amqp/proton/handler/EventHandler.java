@@ -83,6 +83,10 @@ public interface EventHandler {
 
    default void onDelivery(Delivery delivery) throws Exception { }
 
+   default void onDelivery(Delivery delivery, boolean endOfBatch) throws Exception {
+      onDelivery(delivery);
+   }
+
    default void onTransport(Transport transport) throws Exception { }
 
    default void pushBytes(ByteBuf bytes) { }

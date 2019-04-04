@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.PooledByteBufAllocator;
@@ -33,6 +34,7 @@ import org.apache.activemq.artemis.protocol.amqp.sasl.ClientSASL;
 import org.apache.activemq.artemis.protocol.amqp.sasl.SASLResult;
 import org.apache.activemq.artemis.protocol.amqp.sasl.ServerSASL;
 import org.apache.activemq.artemis.spi.core.remoting.ReadyListener;
+import org.apache.activemq.artemis.utils.BooleanUtil;
 import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.apache.qpid.proton.Proton;
 import org.apache.qpid.proton.amqp.Symbol;
@@ -73,7 +75,9 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    private SASLResult saslResult;
 
-   protected volatile boolean dataReceived;
+   private static final AtomicIntegerFieldUpdater<ProtonHandler> DATA_RECEIVED_UPDATER = AtomicIntegerFieldUpdater.newUpdater(ProtonHandler.class, "dataReceived");
+
+   protected volatile int dataReceived = BooleanUtil.toInt(false);
 
    protected boolean receivedFirstPacket = false;
 
@@ -222,7 +226,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    public void inputBuffer(ByteBuf buffer) {
       requireHandler();
-      dataReceived = true;
+      DATA_RECEIVED_UPDATER.lazySet(this, BooleanUtil.toInt(true));
       while (buffer.readableBytes() > 0) {
          int capacity = transport.capacity();
 
@@ -237,7 +241,6 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
             int min = Math.min(capacity, buffer.readableBytes());
             tail.limit(min);
             buffer.readBytes(tail);
-
             flush();
          } else {
             if (capacity == 0) {
@@ -251,11 +254,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    public boolean checkDataReceived() {
-      boolean res = dataReceived;
-
-      dataReceived = false;
-
-      return res;
+      return BooleanUtil.toBoolean(DATA_RECEIVED_UPDATER.getAndSet(this, BooleanUtil.toInt(false)));
    }
 
    public long getCreationTime() {
@@ -467,6 +466,10 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    private void dispatch() {
+      dispatch(true);
+   }
+
+   private void dispatch(boolean endOfBatch) {
       Event ev;
 
       if (inDispatch) {
@@ -481,7 +484,7 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
                   log.trace("Handling " + ev + " towards " + h);
                }
                try {
-                  Events.dispatch(ev, h);
+                  Events.dispatch(ev, h, !collector.more());
                } catch (Exception e) {
                   log.warn(e.getMessage(), e);
                   ErrorCondition error = new ErrorCondition();

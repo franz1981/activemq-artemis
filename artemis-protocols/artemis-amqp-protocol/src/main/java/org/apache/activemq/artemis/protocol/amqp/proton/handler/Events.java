@@ -20,7 +20,7 @@ import org.apache.qpid.proton.engine.Event;
 
 public final class Events {
 
-   public static void dispatch(Event event, EventHandler handler) throws Exception {
+   public static void dispatch(Event event, EventHandler handler, boolean endOfBatch) throws Exception {
       switch (event.getType()) {
          case CONNECTION_INIT:
             handler.onInit(event.getConnection());
@@ -89,7 +89,7 @@ public final class Events {
             handler.onTransport(event.getTransport());
             break;
          case DELIVERY:
-            handler.onDelivery(event.getDelivery());
+            handler.onDelivery(event.getDelivery(), endOfBatch);
             break;
          default:
             break;

@@ -871,8 +871,25 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
    public RoutingStatus route(final Message message,
                               final RoutingContext context,
                               final boolean direct,
+                              boolean endOfBatch) throws Exception {
+      return route(message, context, direct, true, null, endOfBatch);
+   }
+
+   @Override
+   public RoutingStatus route(final Message message,
+                              final RoutingContext context,
+                              final boolean direct,
                               boolean rejectDuplicates,
                               final Binding bindingMove) throws Exception {
+      return route(message, context, direct, rejectDuplicates, bindingMove, true);
+   }
+
+   private RoutingStatus route(final Message message,
+                               final RoutingContext context,
+                               final boolean direct,
+                               boolean rejectDuplicates,
+                               final Binding bindingMove,
+                               boolean endOfBatch) throws Exception {
 
       RoutingStatus result;
       // Sanity check
@@ -973,7 +990,7 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
          } else {
             result = RoutingStatus.OK;
             try {
-               processRoute(message, context, direct);
+               processRoute(message, context, direct, endOfBatch);
             } catch (ActiveMQAddressFullException e) {
                if (startedTX.get()) {
                   context.getTransaction().rollback();
@@ -1265,11 +1282,12 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
 
    }
 
-   @Override
-   public void processRoute(final Message message,
+   private void processRoute(final Message message,
                             final RoutingContext context,
-                            final boolean direct) throws Exception {
-      final List<MessageReference> refs = new ArrayList<>();
+                            final boolean direct,
+                            final boolean endOfBatch) throws Exception {
+      List<MessageReference> refs = null;
+      MessageReference ref = null;
 
       Transaction tx = context.getTransaction();
 
@@ -1294,7 +1312,17 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
             if (deliveryTime != null) {
                reference.setScheduledDeliveryTime(deliveryTime);
             }
-            refs.add(reference);
+            if (ref != null) {
+               assert refs == null;
+               refs = new ArrayList<>(2);
+               refs.add(ref);
+               ref = null;
+               refs.add(reference);
+            } else if (refs != null) {
+               refs.add(reference);
+            } else {
+               ref = reference;
+            }
 
             message.incrementRefCount();
          }
@@ -1316,7 +1344,17 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
             if (deliveryTime != null) {
                reference.setScheduledDeliveryTime(deliveryTime);
             }
-            refs.add(reference);
+            if (ref != null) {
+               assert refs == null;
+               refs = new ArrayList<>(2);
+               refs.add(ref);
+               ref = null;
+               refs.add(reference);
+            } else if (refs != null) {
+               refs.add(reference);
+            } else {
+               ref = reference;
+            }
 
             if (message.isDurable()) {
                int durableRefCount = message.incrementDurableRefCount();
@@ -1355,8 +1393,10 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
       }
 
       if (tx != null) {
-         tx.addOperation(new AddOperation(refs));
+         tx.addOperation(new AddOperation(refs != null ? refs : Collections.singletonList(ref)));
       } else {
+         final List<MessageReference> msgRefs = refs;
+         final MessageReference msgRef = ref;
          // This will use the same thread if there are no pending operations
          // avoiding a context switch on this case
          storageManager.afterCompleteOperations(new IOCallback() {
@@ -1367,10 +1407,21 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
 
             @Override
             public void done() {
-               context.processReferences(refs, direct);
+               if (msgRefs != null) {
+                  context.processReferences(msgRefs, direct, endOfBatch);
+               } else {
+                  context.processReference(msgRef, direct, endOfBatch);
+               }
             }
          });
       }
+   }
+
+   @Override
+   public void processRoute(final Message message,
+                            final RoutingContext context,
+                            final boolean direct) throws Exception {
+      processRoute(message, context, direct, true);
    }
 
    /**

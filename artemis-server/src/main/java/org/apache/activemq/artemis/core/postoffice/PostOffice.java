@@ -136,6 +136,13 @@ public interface PostOffice extends ActiveMQComponent {
                        RoutingContext context,
                        boolean direct) throws Exception;
 
+   default RoutingStatus route(Message message,
+                               RoutingContext context,
+                               boolean direct,
+                               boolean endOfBatch) throws Exception {
+      return route(message, context, direct);
+   }
+
    RoutingStatus route(Message message,
                        RoutingContext context,
                        boolean direct,

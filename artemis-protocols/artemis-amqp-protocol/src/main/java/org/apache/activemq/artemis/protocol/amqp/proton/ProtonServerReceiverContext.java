@@ -255,13 +255,18 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
       return defaultRoutingType;
    }
 
+   @Override
+   public void onMessage(Delivery delivery) throws ActiveMQAMQPException {
+      onMessage(delivery, true);
+   }
+
    /*
     * called when Proton receives a message to be delivered via a Delivery.
     *
     * This may be called more than once per deliver so we have to cache the buffer until we have received it all.
     */
    @Override
-   public void onMessage(Delivery delivery) throws ActiveMQAMQPException {
+   public void onMessage(Delivery delivery, boolean endOfBatch) throws ActiveMQAMQPException {
       connection.requireInHandler();
       Receiver receiver = ((Receiver) delivery.getLink());
 
@@ -296,12 +301,12 @@ public class ProtonServerReceiverContext extends ProtonInitializable implements 
 
       final Transaction txUsed = tx;
 
-      actualDelivery(delivery, receiver, data, txUsed);
+      actualDelivery(delivery, receiver, data, txUsed, endOfBatch);
    }
 
-   private void actualDelivery(Delivery delivery, Receiver receiver, ReadableBuffer data, Transaction tx) {
+   private void actualDelivery(Delivery delivery, Receiver receiver, ReadableBuffer data, Transaction tx, boolean endOfBatch) {
       try {
-         sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data, routingContext);
+         sessionSPI.serverSend(this, tx, receiver, delivery, address, delivery.getMessageFormat(), data, routingContext, endOfBatch);
       } catch (Exception e) {
          log.warn(e.getMessage(), e);
          Rejected rejected = new Rejected();

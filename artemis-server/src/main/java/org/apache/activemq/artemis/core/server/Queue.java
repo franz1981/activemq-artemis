@@ -147,6 +147,10 @@ public interface Queue extends Bindable,CriticalComponent {
 
    void addTail(MessageReference ref, boolean direct);
 
+   default void addTail(MessageReference ref, boolean direct, boolean endOfBatch) {
+      addTail(ref, direct);
+   }
+
    void addHead(MessageReference ref, boolean scheduling);
 
    void addHead(List<MessageReference> refs, boolean scheduling);

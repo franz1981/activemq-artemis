@@ -129,13 +129,18 @@ public final class RoutingContextImpl implements RoutingContext {
    }
 
    @Override
-   public void processReferences(final List<MessageReference> refs, final boolean direct) {
-      internalprocessReferences(refs, direct);
+   public void processReferences(final List<MessageReference> refs, final boolean direct, boolean endOfBatch) {
+      internalprocessReferences(refs, direct, endOfBatch);
    }
 
-   private void internalprocessReferences(final List<MessageReference> refs, final boolean direct) {
+   @Override
+   public void processReference(MessageReference ref, boolean direct, boolean endOfBatch) {
+      ref.getQueue().addTail(ref, direct, endOfBatch);
+   }
+
+   private void internalprocessReferences(final List<MessageReference> refs, final boolean direct, boolean endOfBatch) {
       for (MessageReference ref : refs) {
-         ref.getQueue().addTail(ref, direct);
+         ref.getQueue().addTail(ref, direct, endOfBatch);
       }
    }
 

@@ -535,10 +535,15 @@ public class AMQPConnectionContext extends ProtonInitializable implements EventH
 
    @Override
    public void onDelivery(Delivery delivery) throws Exception {
+      onDelivery(delivery, true);
+   }
+
+   @Override
+   public void onDelivery(Delivery delivery, boolean endOfBatch) throws Exception {
       handler.requireHandler();
       ProtonDeliveryHandler handler = (ProtonDeliveryHandler) delivery.getLink().getContext();
       if (handler != null) {
-         handler.onMessage(delivery);
+         handler.onMessage(delivery, endOfBatch);
       } else {
          log.warn("Handler is null, can't delivery " + delivery, new Exception("tracing location"));
       }

@@ -432,7 +432,8 @@ public class AMQPSessionCallback implements SessionCallback {
                           SimpleString address,
                           int messageFormat,
                           ReadableBuffer data,
-                          RoutingContext routingContext) throws Exception {
+                          RoutingContext routingContext,
+                          boolean endOfBatch) throws Exception {
       AMQPMessage message = new AMQPMessage(messageFormat, data, null, coreMessageObjectPools);
       if (address != null) {
          message.setAddress(address);
@@ -467,7 +468,7 @@ public class AMQPSessionCallback implements SessionCallback {
                rejectMessage(delivery, AmqpError.RESOURCE_LIMIT_EXCEEDED, "Address is full: " + address);
             }
          } else {
-            serverSend(context, transaction, message, delivery, receiver, routingContext);
+            serverSend(context, transaction, message, delivery, receiver, routingContext, endOfBatch);
          }
       } finally {
          resetContext(oldcontext);
@@ -504,10 +505,11 @@ public class AMQPSessionCallback implements SessionCallback {
                            final Message message,
                            final Delivery delivery,
                            final Receiver receiver,
-                           final RoutingContext routingContext) throws Exception {
+                           final RoutingContext routingContext,
+                           final boolean endOfBatch) throws Exception {
       message.setConnectionID(receiver.getSession().getConnection().getRemoteContainer());
       invokeIncoming((AMQPMessage) message, (ActiveMQProtonRemotingConnection) transportConnection.getProtocolConnection());
-      serverSession.send(transaction, message, directDeliver, false, routingContext);
+      serverSession.send(transaction, message, directDeliver, false, routingContext, endOfBatch);
 
       afterIO(new IOCallback() {
          @Override

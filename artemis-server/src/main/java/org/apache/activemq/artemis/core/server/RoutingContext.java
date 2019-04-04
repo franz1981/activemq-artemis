@@ -78,7 +78,9 @@ public interface RoutingContext {
 
    RoutingType getPreviousRoutingType();
 
-   void processReferences(List<MessageReference> refs, boolean direct);
+   void processReferences(List<MessageReference> refs, boolean direct, boolean endOfBatch);
+
+   void processReference(MessageReference refs, boolean direct, boolean endOfBatch);
 
    boolean isReusable(Message message, int version);
 

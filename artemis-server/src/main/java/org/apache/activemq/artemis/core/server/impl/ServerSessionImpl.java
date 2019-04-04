@@ -1560,6 +1560,16 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
                                           final boolean direct,
                                           boolean noAutoCreateQueue,
                                           RoutingContext routingContext) throws Exception {
+      return send(tx, messageParameter, direct, noAutoCreateQueue, routingContext, true);
+   }
+
+   @Override
+   public synchronized RoutingStatus send(Transaction tx,
+                                          Message messageParameter,
+                                          final boolean direct,
+                                          boolean noAutoCreateQueue,
+                                          RoutingContext routingContext,
+                                          boolean endOfBatch) throws Exception {
       if (AuditLogger.isMessageEnabled()) {
          AuditLogger.coreSendMessage(this, getUsername(), tx, messageParameter, direct, noAutoCreateQueue, routingContext);
       }
@@ -1612,7 +1622,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
             result = handleManagementMessage(tx, message, direct);
          } else {
-            result = doSend(tx, message, address, direct, noAutoCreateQueue, routingContext);
+            result = doSend(tx, message, address, direct, noAutoCreateQueue, routingContext, endOfBatch);
          }
 
       } catch (Exception e) {
@@ -1912,7 +1922,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
 
    @Override
-   public synchronized RoutingStatus doSend(final Transaction tx,
+   public RoutingStatus doSend(final Transaction tx,
                                             final Message msg,
                                             final SimpleString originalAddress,
                                             final boolean direct,
@@ -1920,14 +1930,23 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return doSend(tx, msg, originalAddress, direct, noAutoCreateQueue, routingContext);
    }
 
-
    @Override
-   public synchronized RoutingStatus doSend(final Transaction tx,
-                                            final Message msg,
-                                            final SimpleString originalAddress,
-                                            final boolean direct,
-                                            final boolean noAutoCreateQueue,
-                                            final RoutingContext routingContext) throws Exception {
+   public RoutingStatus doSend(final Transaction tx,
+                               final Message msg,
+                               final SimpleString originalAddress,
+                               final boolean direct,
+                               final boolean noAutoCreateQueue,
+                               final RoutingContext routingContext) throws Exception {
+      return doSend(tx, msg, originalAddress, direct, noAutoCreateQueue, routingContext, true);
+   }
+
+   private synchronized RoutingStatus doSend(final Transaction tx,
+                                             final Message msg,
+                                             final SimpleString originalAddress,
+                                             final boolean direct,
+                                             final boolean noAutoCreateQueue,
+                                             final RoutingContext routingContext,
+                                             boolean endOfBatch) throws Exception {
 
       RoutingStatus result = RoutingStatus.OK;
 
@@ -1969,7 +1988,7 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
          routingContext.setAddress(art.getName());
          routingContext.setRoutingType(art.getRoutingType());
 
-         result = postOffice.route(msg, routingContext, direct);
+         result = postOffice.route(msg, routingContext, direct, endOfBatch);
 
          Pair<Object, AtomicLong> value = targetAddressInfos.get(msg.getAddressSimpleString());
 

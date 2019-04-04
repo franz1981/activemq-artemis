@@ -29,6 +29,10 @@ public interface ProtonDeliveryHandler {
 
    void onMessage(Delivery delivery) throws ActiveMQAMQPException;
 
+   default void onMessage(Delivery delivery, boolean endOfBatch) throws ActiveMQAMQPException {
+      onMessage(delivery);
+   }
+
    /*
    * we have to distinguish between a remote close on the link and a close via a connection or session as the latter mean
    * that a link reattach can happen and we need to keep the underlying resource (queue/subscription) around for pub subs
