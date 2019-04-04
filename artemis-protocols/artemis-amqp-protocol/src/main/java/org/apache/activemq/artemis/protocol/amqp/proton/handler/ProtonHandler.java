@@ -53,7 +53,7 @@ import org.jboss.logging.Logger;
 public class ProtonHandler extends ProtonInitializable implements SaslListener {
 
    private static final Logger log = Logger.getLogger(ProtonHandler.class);
-
+   private static final int MAX_BATCH_DELIVERIES = Integer.getInteger("max.batch.deliveries", -1);
    private static final byte SASL = 0x03;
 
    private static final byte BARE = 0x00;
@@ -466,10 +466,6 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
    }
 
    private void dispatch() {
-      dispatch(true);
-   }
-
-   private void dispatch(boolean endOfBatch) {
       Event ev;
 
       if (inDispatch) {
@@ -477,21 +473,33 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
          return;
       }
       try {
+         int deliveries = 0;
          inDispatch = true;
          while ((ev = collector.peek()) != null) {
             for (EventHandler h : handlers) {
                if (log.isTraceEnabled()) {
-                  log.trace("Handling " + ev + " towards " + h);
+                  log.tracef("Handling %s towards %s", ev, h);
                }
                try {
-                  Events.dispatch(ev, h, !collector.more());
+                  boolean endOfBatch = true;
+                  if (ev.getType() == Event.Type.DELIVERY) {
+                     if (MAX_BATCH_DELIVERIES > 0) {
+                        deliveries++;
+                        if (deliveries < MAX_BATCH_DELIVERIES) {
+                           endOfBatch = !collector.more();
+                           if (endOfBatch) {
+                              deliveries = 0;
+                           }
+                        } else {
+                           deliveries = 0;
+                        }
+                     } else {
+                        endOfBatch = !collector.more();
+                     }
+                  }
+                  Events.dispatch(ev, h, endOfBatch);
                } catch (Exception e) {
-                  log.warn(e.getMessage(), e);
-                  ErrorCondition error = new ErrorCondition();
-                  error.setCondition(AmqpError.INTERNAL_ERROR);
-                  error.setDescription("Unrecoverable error: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
-                  connection.setCondition(error);
-                  connection.close();
+                  onDispatchException(e);
                }
             }
 
@@ -505,25 +513,14 @@ public class ProtonHandler extends ProtonInitializable implements SaslListener {
       flushBytes();
    }
 
-
-   public void handleError(Exception e) {
-      if (workerExecutor.inEventLoop()) {
-         internalHandlerError(e);
-      } else {
-         runLater(() -> internalHandlerError(e));
-      }
-   }
-
-   private void internalHandlerError(Exception e) {
+   private void onDispatchException(Exception e) {
       log.warn(e.getMessage(), e);
       ErrorCondition error = new ErrorCondition();
       error.setCondition(AmqpError.INTERNAL_ERROR);
       error.setDescription("Unrecoverable error: " + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
       connection.setCondition(error);
       connection.close();
-      flush();
    }
-
 
    public void open(String containerId, Map<Symbol, Object> connectionProperties) {
       this.transport.open();
