@@ -100,7 +100,7 @@
             <configuration>
                <compilerArgs>
                   <!-- TODO: do this only for generated-sources -->
-                  <arg>-Xep:MissingOverride:WARN</arg>
+                  <arg>-Xplugin:ErrorProne -Xep:MissingOverride:WARN</arg>
                </compilerArgs>
             </configuration>
          </plugin>
