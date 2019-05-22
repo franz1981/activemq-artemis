@@ -47,6 +47,7 @@ import org.apache.activemq.artemis.api.core.management.QueueControl;
 import org.apache.activemq.broker.artemiswrapper.ArtemisBrokerWrapper;
 import org.apache.activemq.command.ActiveMQDestination;
 import org.apache.activemq.command.ActiveMQQueue;
+import org.junit.Ignore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -536,11 +537,6 @@ public class JMSConsumerTest extends JmsTestSupport {
       assertEquals(4, counter.get());
    }
 
-   public void initCombosForTestMessageListenerWithConsumerWithPrefetch1() {
-      addCombinationValues("deliveryMode", new Object[]{Integer.valueOf(DeliveryMode.NON_PERSISTENT), Integer.valueOf(DeliveryMode.PERSISTENT)});
-      addCombinationValues("destinationType", new Object[]{Byte.valueOf(ActiveMQDestination.QUEUE_TYPE), Byte.valueOf(ActiveMQDestination.TOPIC_TYPE), Byte.valueOf(ActiveMQDestination.TEMP_QUEUE_TYPE), Byte.valueOf(ActiveMQDestination.TEMP_TOPIC_TYPE)});
-   }
-
    public void testMessageListenerWithConsumerWithPrefetch1() throws Exception {
 
       final AtomicInteger counter = new AtomicInteger(0);
@@ -573,11 +569,7 @@ public class JMSConsumerTest extends JmsTestSupport {
       assertEquals(4, counter.get());
    }
 
-   public void initCombosForTestMessageListenerWithConsumer() {
-      addCombinationValues("deliveryMode", new Object[]{Integer.valueOf(DeliveryMode.NON_PERSISTENT), Integer.valueOf(DeliveryMode.PERSISTENT)});
-      addCombinationValues("destinationType", new Object[]{Byte.valueOf(ActiveMQDestination.QUEUE_TYPE), Byte.valueOf(ActiveMQDestination.TOPIC_TYPE), Byte.valueOf(ActiveMQDestination.TEMP_QUEUE_TYPE), Byte.valueOf(ActiveMQDestination.TEMP_TOPIC_TYPE)});
-   }
-
+   @Ignore
    public void testMessageListenerWithConsumer() throws Exception {
 
       final AtomicInteger counter = new AtomicInteger(0);

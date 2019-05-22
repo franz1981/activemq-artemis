@@ -87,7 +87,7 @@ public class BodyIsAssignableFromTest extends MessageBodyTestCase {
             Object receivedBody = msg.getBody(c);
             Assert.assertTrue("correct type " + c, c.isInstance(receivedBody));
             if (body.getClass().isAssignableFrom(byte[].class)) {
-               Arrays.equals((byte[]) body, (byte[]) receivedBody);
+               Assert.assertTrue(Arrays.equals((byte[]) body, (byte[]) receivedBody));
             } else {
                Assert.assertEquals("clazz=" + c + ", bodies must match.. " + body.equals(receivedBody), body, receivedBody);
             }

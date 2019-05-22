@@ -50,7 +50,7 @@ public class ActiveMQConsumerResourceTest {
    ActiveMQConsumerResource consumer = new ActiveMQConsumerResource(server.getVmURL(), TEST_QUEUE);
 
    @Rule
-   public RuleChain ruleChain = RuleChain.outerRule(new ThreadLeakCheckRule()).outerRule(server).around(consumer);
+   public RuleChain ruleChain = RuleChain.outerRule(new ThreadLeakCheckRule()).around(server).around(consumer);
 
    ClientMessage sent = null;
 
