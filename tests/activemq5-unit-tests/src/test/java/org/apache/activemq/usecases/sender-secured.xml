@@ -25,7 +25,7 @@
   <broker brokerName="sender" persistent="false" useJmx="true" xmlns="http://activemq.apache.org/schema/core">
 
     <networkConnectors>
-      <networkConnector uri="static:(tcp://localhost:62002)" userName="system" password="manager">
+      <networkConnector uri="static:(tcp://localhost:62002)" user="system" password="manager">
         <staticallyIncludedDestinations>
           <topic physicalName=">"/>
         </staticallyIncludedDestinations>

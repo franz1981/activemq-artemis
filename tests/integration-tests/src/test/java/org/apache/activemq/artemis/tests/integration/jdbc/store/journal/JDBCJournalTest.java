@@ -83,7 +83,7 @@ public class JDBCJournalTest extends ActiveMQTestBase {
          SQLProvider.DatabaseStoreType.MESSAGE_JOURNAL);
       scheduledExecutorService = new ScheduledThreadPoolExecutor(5);
       executorService = Executors.newSingleThreadExecutor();
-      journal = new JDBCJournalImpl(dbConf.getJdbcConnectionUrl(), dbConf.getJdbcDriverClassName(), sqlProvider, scheduledExecutorService, executorService, new IOCriticalErrorListener() {
+      journal = new JDBCJournalImpl(dbConf.getJdbcConnectionUrl(), null, null, dbConf.getJdbcDriverClassName(), sqlProvider, scheduledExecutorService, executorService, new IOCriticalErrorListener() {
          @Override
          public void onIOException(Throwable code, String message, SequentialFile file) {
 
@@ -106,6 +106,8 @@ public class JDBCJournalTest extends ActiveMQTestBase {
       Assert.assertTrue(journal.isStarted());
       Assert.assertEquals(0, journal.getNumberOfRecords());
       final JDBCJournalImpl secondJournal = new JDBCJournalImpl(dbConf.getJdbcConnectionUrl(),
+                                                                          dbConf.getJdbcUser(),
+                                                                          dbConf.getJdbcPassword(),
                                                                           dbConf.getJdbcDriverClassName(),
                                                                           sqlProvider, scheduledExecutorService,
                                                                           executorService, (code, message, file) -> {

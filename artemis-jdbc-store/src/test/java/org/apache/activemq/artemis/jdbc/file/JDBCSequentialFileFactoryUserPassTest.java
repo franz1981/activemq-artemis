@@ -16,19 +16,6 @@
  */
 package org.apache.activemq.artemis.jdbc.file;
 
-import java.nio.ByteBuffer;
-import java.sql.DriverManager;
-import java.sql.SQLException;
-import java.util.HashSet;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.core.io.IOCallback;
@@ -47,12 +34,25 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 
+import java.nio.ByteBuffer;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
-public class JDBCSequentialFileFactoryTest {
+public class JDBCSequentialFileFactoryUserPassTest {
 
    @Rule
    public ThreadLeakCheckRule leakCheckRule = new ThreadLeakCheckRule();
@@ -66,10 +66,11 @@ public class JDBCSequentialFileFactoryTest {
    @Before
    public void setup() throws Exception {
       executor = Executors.newSingleThreadExecutor(ActiveMQThreadFactory.defaultThreadFactory());
-
+      System.setProperty("derby.connection.requireAuthentication", "true");
+      System.setProperty("derby.user.testuser", "testpassword");
       String connectionUrl = "jdbc:derby:target/data;create=true";
       String tableName = "FILES";
-      factory = new JDBCSequentialFileFactory(connectionUrl, null, null, className, JDBCUtils.getSQLProvider(className, tableName, SQLProvider.DatabaseStoreType.PAGE), executor, new IOCriticalErrorListener() {
+      factory = new JDBCSequentialFileFactory(connectionUrl, "testuser", "testpassword", className, JDBCUtils.getSQLProvider(className, tableName, SQLProvider.DatabaseStoreType.PAGE), executor, new IOCriticalErrorListener() {
          @Override
          public void onIOException(Throwable code, String message, SequentialFile file) {
          }
@@ -86,9 +87,11 @@ public class JDBCSequentialFileFactoryTest {
    @After
    public void shutdownDerby() {
       try {
-         DriverManager.getConnection("jdbc:derby:;shutdown=true");
+         DriverManager.getConnection("jdbc:derby:;shutdown=true", "testuser", "testpassword");
       } catch (Exception ignored) {
       }
+      System.clearProperty("derby.connection.requireAuthentication");
+      System.clearProperty("derby.user.testuser");
    }
 
    @Test

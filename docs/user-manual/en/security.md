@@ -19,6 +19,12 @@ certificate this name is the name to which their certificate's DN maps. If
 server will simply use whatever user name (if any) the client provides. This
 option is `false` by default.
 
+## Rejecting messages without a Validated user
+
+To assist in security the `reject-empty-validated-user` option exists. If
+this is `true` then the server will reject any message that does not have a 
+validated user set. For JMS and Stomp clients this is mapped to the key `JMSXUserID`. 
+
 ## Role based security for addresses
 
 Apache ActiveMQ Artemis contains a flexible role-based security model for

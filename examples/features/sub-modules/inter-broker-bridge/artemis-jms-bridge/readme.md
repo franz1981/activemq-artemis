@@ -73,7 +73,7 @@ This approach might be preferred if for example you only have access to the 5.x 
 ```xml
    <bean id="5xConnectionFactory" class="org.apache.activemq.ActiveMQConnectionFactory">
       <property name="brokerURL" value="tcp://localhost:61616"/>
-      <property name="userName" value="admin"/>
+      <property name="user" value="admin"/>
       <property name="password" value="password"/>
    </bean>
 
