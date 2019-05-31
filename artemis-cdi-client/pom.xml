@@ -84,6 +84,11 @@
          <artifactId>javax.inject</artifactId>
       </dependency>
       <dependency>
+         <groupId>javax.annotation</groupId>
+         <artifactId>javax.annotation-api</artifactId>
+         <version>${javax.annotation.version}</version>
+      </dependency>
+      <dependency>
          <groupId>javax.enterprise</groupId>
          <artifactId>cdi-api</artifactId>
       </dependency>
