@@ -26,7 +26,6 @@ import java.lang.reflect.Field;
 import java.rmi.server.RemoteObject;
 import java.rmi.server.RemoteRef;
 
-import com.sun.jmx.remote.internal.ProxyRef;
 import org.apache.activemq.artemis.tests.smoke.common.SmokeTestBase;
 import org.junit.Assert;
 import org.junit.Before;
@@ -47,16 +46,30 @@ public class JmxConnectionTest extends SmokeTestBase {
    private static final int RMI_REGISTRY_PORT = 10098;
 
    public static final String SERVER_NAME_0 = "jmx";
+   private Class<?> proxyRefClass;
 
    @Before
    public void before() throws Exception {
       cleanupData(SERVER_NAME_0);
       disableCheckThread();
       startServer(SERVER_NAME_0, 0, 30000);
+      try {
+         final Class<?> aClass = Class.forName("com.sun.jmx.remote.internal.ProxyRef");
+         proxyRefClass = aClass;
+      } catch (ClassNotFoundException ex) {
+         //try with a shiny new version
+         try {
+            final Class<?> aClass = Class.forName("com.sun.jmx.remote.internal.rmi.ProxyRef");
+            proxyRefClass = aClass;
+         } catch (ClassNotFoundException ex2) {
+            //no op
+         }
+      }
    }
 
    @Test
    public void testJmxConnection() throws Throwable {
+      Assert.assertNotNull(proxyRefClass);
       try {
 
          // Without this, the RMI server would bind to the default interface IP (the user's local IP mostly)
@@ -96,13 +109,12 @@ public class JmxConnectionTest extends SmokeTestBase {
 
             // 3. RemoteObject::getRef is hereby expected to return ProxyRef
             RemoteRef remoteRef = remoteObject.getRef();
-            Assert.assertTrue(remoteRef instanceof ProxyRef);
-            ProxyRef proxyRef = (ProxyRef) remoteRef;
+            Assert.assertTrue(proxyRefClass.isInstance(remoteRef));
 
             // 4. ProxyRef::ref is expected to contain UnicastRef (UnicastRef2 resp.)
-            Field refField = ProxyRef.class.getDeclaredField("ref");
+            Field refField = proxyRefClass.getDeclaredField("ref");
             refField.setAccessible(true);
-            remoteRef = (RemoteRef) refField.get(proxyRef);
+            remoteRef = (RemoteRef) refField.get(remoteRef);
             Assert.assertTrue(remoteRef instanceof UnicastRef);
 
             // 5. UnicastRef::getLiveRef returns LiveRef
@@ -118,6 +130,5 @@ public class JmxConnectionTest extends SmokeTestBase {
          throw e;
       }
    }
-
 
 }
