@@ -58,7 +58,7 @@ public class SimpleTest extends ActiveMQTestBase {
        * Note that creating the server instance using this method ensures that the server will be cleaned up properly
        * when the test is torn down.
        */
-      server = createServer(false, createDefaultInVMConfig());
+      server = createServer(false, createDefaultNettyConfig());
       server.start();
 
       /**

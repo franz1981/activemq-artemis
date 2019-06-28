@@ -165,6 +165,9 @@ public abstract class ActiveMQTestBase extends Assert {
       Env.setTestEnv(true);
    }
 
+   @ClassRule
+   public static NoFDBehind noFDBehind = new NoFDBehind(-1, 1000);
+
    private static final Logger logger = Logger.getLogger(ActiveMQTestBase.class);
 
    /** This will make sure threads are not leaking between tests */
