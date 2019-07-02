@@ -2012,4 +2012,12 @@ public interface ActiveMQServerLogger extends BasicLogger {
    @Message(id = 224099, value = "Message with ID {0} has a header too large. More information available on debug level for class {1}",
       format = Message.Format.MESSAGE_FORMAT)
    void messageWithHeaderTooLarge(Long messageID, String loggerClass);
+
+   @LogMessage(level = Logger.Level.WARN)
+   @Message(id = 224100, value = "Event loop group did not completely shutdown", format = Message.Format.MESSAGE_FORMAT)
+   void nettyEventLoopGroupShutdownError();
+
+   @LogMessage(level = Logger.Level.WARN)
+   @Message(id = 224101, value = "Can't await event loop group shutdown because in event loop", format = Message.Format.MESSAGE_FORMAT)
+   void nettyEventLoopGroupShutdownInEventLoop();
 }

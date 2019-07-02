@@ -102,7 +102,7 @@ public class CliTestBase {
 
    protected void stopServer() throws Exception {
       Artemis.internalExecute("stop");
-      assertTrue(Run.latchRunning.await(5, TimeUnit.SECONDS));
+      assertTrue(Run.latchRunning.await(7, TimeUnit.SECONDS));
       assertEquals(0, LibaioContext.getTotalMaxIO());
    }
 

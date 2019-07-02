@@ -68,6 +68,8 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslHandler;
 import io.netty.util.ResourceLeakDetector;
+import io.netty.util.concurrent.EventExecutor;
+import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.GlobalEventExecutor;
 import org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration;
@@ -685,8 +687,24 @@ public class NettyAcceptor extends AbstractAcceptor {
 
       // Shutdown the EventLoopGroup if no new task was added for 100ms or if
       // 3000ms elapsed.
-      eventLoopGroup.shutdownGracefully(100, 3000, TimeUnit.MILLISECONDS);
+      boolean inEventLoop = false;
+      for (EventExecutor eventExecutor : eventLoopGroup) {
+         if (eventExecutor.inEventLoop()) {
+            inEventLoop = true;
+            break;
+         }
+      }
+
+      Future<?> eventFuture = eventLoopGroup.shutdownGracefully(100, 3000, TimeUnit.MILLISECONDS);
       eventLoopGroup = null;
+
+      if (!inEventLoop) {
+         if (!eventFuture.awaitUninterruptibly(10000, TimeUnit.MILLISECONDS)) {
+            ActiveMQServerLogger.LOGGER.nettyEventLoopGroupShutdownError();
+         }
+      } else {
+         ActiveMQServerLogger.LOGGER.nettyEventLoopGroupShutdownInEventLoop();
+      }
 
       channelClazz = null;
 
