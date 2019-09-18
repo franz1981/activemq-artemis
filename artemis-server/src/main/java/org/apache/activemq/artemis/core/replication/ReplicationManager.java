@@ -620,7 +620,7 @@ public final class ReplicationManager implements ActiveMQComponent {
             // We cannot simply send everything of a file through the executor,
             // otherwise we would run out of memory.
             // so we don't use the executor here
-            sendSyncFileMessage(new ReplicationSyncFileMessage(content, pageStore, id, raf, fileChannel, offset, toSend), offset + toSend == fileSize);
+            sendSyncFileMessage(new ReplicationSyncFileMessage(content, pageStore, id, raf, fileChannel, offset, toSend == 0 ? -1 : toSend), offset + toSend == fileSize);
             packetsSent++;
             offset += toSend;
 
