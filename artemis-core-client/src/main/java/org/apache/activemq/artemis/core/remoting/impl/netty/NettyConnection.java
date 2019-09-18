@@ -33,7 +33,8 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelPromise;
 import io.netty.channel.EventLoop;
 import io.netty.handler.ssl.SslHandler;
-import io.netty.handler.stream.ChunkedFile;
+import io.netty.handler.stream.ChunkedNioFile;
+import io.netty.util.internal.SystemPropertyUtil;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
@@ -52,6 +53,7 @@ public class NettyConnection implements Connection {
 
    private static final Logger logger = Logger.getLogger(NettyConnection.class);
 
+   private static final boolean REGION_ENABLED = SystemPropertyUtil.getBoolean("io.netty.region", true);
    private static final int DEFAULT_BATCH_BYTES = Integer.getInteger("io.netty.batch.bytes", 8192);
    private static final int DEFAULT_WAIT_MILLIS = 10_000;
 
@@ -356,15 +358,19 @@ public class NettyConnection implements Connection {
    }
 
    private Object getFileObject(RandomAccessFile raf, FileChannel fileChannel, long offset, int dataSize) {
-      if (channel.pipeline().get(SslHandler.class) == null) {
-         return new NonClosingDefaultFileRegion(fileChannel, offset, dataSize);
-      } else {
+      if (!REGION_ENABLED || channel.pipeline().get(SslHandler.class) != null) {
          try {
-            return new ChunkedFile(raf, offset, dataSize, 8192);
+            return new ChunkedNioFile(fileChannel, offset, dataSize, DEFAULT_BATCH_BYTES) {
+               @Override
+               public void close() throws Exception {
+                  logger.debugf("read fully %d bytes", dataSize);
+               }
+            };
          } catch (IOException e) {
             throw new RuntimeException(e);
          }
       }
+      return new NonClosingDefaultFileRegion(fileChannel, offset, dataSize);
    }
 
    @Override
