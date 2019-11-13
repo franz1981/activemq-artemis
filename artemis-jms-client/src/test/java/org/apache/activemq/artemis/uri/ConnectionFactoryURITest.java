@@ -36,6 +36,7 @@ import org.apache.activemq.artemis.api.core.JGroupsFileBroadcastEndpointFactory;
 import org.apache.activemq.artemis.api.core.JGroupsPropertiesBroadcastEndpointFactory;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.core.UDPBroadcastEndpointFactory;
+import org.apache.activemq.artemis.api.core.client.ActiveMQClient;
 import org.apache.activemq.artemis.api.jms.ActiveMQJMSClient;
 import org.apache.activemq.artemis.api.jms.JMSFactoryType;
 import org.apache.activemq.artemis.core.client.impl.ServerLocatorImpl;
@@ -65,6 +66,52 @@ public class ConnectionFactoryURITest {
       ignoreList.add("protocolManagerFactoryStr");
       ignoreList.add("incomingInterceptorList");
       ignoreList.add("outgoingInterceptorList");
+   }
+
+   @Test
+   public void testListOfIPsWithParenthesis() {
+      final String uri = "(tcp://localhost:3030,tcp://localhost:3031)?ha=true&reconnectAttempts=-1&retryInterval=5000";
+      final ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(uri);
+      Map<String, Object> params = factory.getStaticConnectors()[0].getParams();
+      Assert.assertEquals("localhost", params.get("host"));
+      Assert.assertEquals("3030", params.get("port"));
+      Map<String, Object> params1 = factory.getStaticConnectors()[1].getParams();
+      Assert.assertEquals("localhost", params1.get("host"));
+      Assert.assertEquals("3031", params1.get("port"));
+      Assert.assertTrue(factory.isHA());
+      Assert.assertEquals(-1, factory.getReconnectAttempts());
+      Assert.assertEquals(5000, factory.getRetryInterval());
+   }
+
+   @Test
+   public void testListOfIPsNoParenthesis() {
+      final String uri = "tcp://localhost:3030,tcp://localhost:3031?ha=true&reconnectAttempts=-1&retryInterval=5000";
+      final ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(uri);
+      final TransportConfiguration[] staticConnectors = factory.getStaticConnectors();
+      Assert.assertEquals(1, staticConnectors.length);
+      Map<String, Object> params = factory.getStaticConnectors()[0].getParams();
+      Assert.assertEquals("null", params.get("host"));
+      Assert.assertEquals("-1", params.get("port"));
+      Assert.assertTrue(factory.isHA());
+      Assert.assertEquals(-1, factory.getReconnectAttempts());
+      Assert.assertEquals(5000, factory.getRetryInterval());
+   }
+
+   @Test
+   public void testListOfIPsExternalParenthesis() {
+      final String uri = "(tcp://localhost:3030,tcp://localhost:3031?ha=true&reconnectAttempts=-1&retryInterval=5000)";
+      final ActiveMQConnectionFactory factory = new ActiveMQConnectionFactory(uri);
+      Map<String, Object> params = factory.getStaticConnectors()[0].getParams();
+      Assert.assertEquals("localhost", params.get("host"));
+      Assert.assertEquals("3030", params.get("port"));
+      Map<String, Object> params1 = factory.getStaticConnectors()[1].getParams();
+      Assert.assertEquals("localhost", params1.get("host"));
+      Assert.assertEquals("3031", params1.get("port"));
+      Assert.assertFalse(factory.isHA());
+      Assert.assertEquals(1, ActiveMQClient.INITIAL_CONNECT_ATTEMPTS);
+      Assert.assertEquals(ActiveMQClient.INITIAL_CONNECT_ATTEMPTS, factory.getServerLocator().getInitialConnectAttempts());
+      Assert.assertEquals(ActiveMQClient.DEFAULT_RECONNECT_ATTEMPTS, factory.getReconnectAttempts());
+      Assert.assertEquals(ActiveMQClient.DEFAULT_RETRY_INTERVAL, factory.getRetryInterval());
    }
 
    @Test
