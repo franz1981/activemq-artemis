@@ -218,6 +218,16 @@ public abstract class ProcessorBase<T> extends HandlerBase {
    }
 
    /**
+    * Returns {@code true} if there are remaining items left to be processed {@code false} otherwise.
+    * <p>
+    * This method is safe to be called by different threads and its accuracy is subject to concurrent modifications.<br>
+    * It's {@code O(1)} cost.
+    */
+   public final boolean isEmpty() {
+      return tasks.isEmpty();
+   }
+
+   /**
     * Returns the remaining items to be processed.
     * <p>
     * This method is safe to be called by different threads and its accuracy is subject to concurrent modifications.<br>

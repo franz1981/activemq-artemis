@@ -24,7 +24,6 @@ import java.util.List;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +35,7 @@ import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
 import org.apache.activemq.artemis.journal.ActiveMQJournalBundle;
 import org.apache.activemq.artemis.journal.ActiveMQJournalLogger;
+import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.jboss.logging.Logger;
 
 /**
@@ -83,7 +83,7 @@ public class JournalFilesRepository {
 
    private final int journalFileOpenTimeout;
 
-   private Executor openFilesExecutor;
+   private ArtemisExecutor openFilesExecutor;
 
    private final Runnable pushOpenRunnable = new Runnable() {
       @Override
@@ -96,6 +96,8 @@ public class JournalFilesRepository {
          }
       }
    };
+
+   private volatile boolean started;
 
    public JournalFilesRepository(final SequentialFileFactory fileFactory,
                                  final JournalImpl journal,
@@ -126,6 +128,18 @@ public class JournalFilesRepository {
       this.userVersion = userVersion;
       this.journal = journal;
       this.journalFileOpenTimeout = journalFileOpenTimeout;
+      this.started = false;
+   }
+
+   private static void checkStarted(boolean expected, boolean found) {
+      if (found != expected) {
+         throw new IllegalStateException("The file repository is " + startedToString(found) +
+                                            " while was expected " + startedToString(expected));
+      }
+   }
+
+   private static String startedToString(boolean value) {
+      return (value ? "started!" : "stopped!");
    }
 
    // Public --------------------------------------------------------
@@ -134,11 +148,29 @@ public class JournalFilesRepository {
       return poolSize;
    }
 
-   public void setExecutor(final Executor fileExecutor) {
+   public synchronized void start() {
+      checkStarted(false, started);
+      started = true;
+   }
+
+   public synchronized void stop() {
+      checkStarted(true, started);
+      final ArtemisExecutor executor = this.openFilesExecutor;
+      if (executor != null && !executor.isEmpty()) {
+         throw new IllegalStateException("openFilesExecutor has some pending tasks: " +
+                                            "before stopping the file repository needs to await " +
+                                            "those tasks to complete");
+      }
+      clear();
+      started = false;
+   }
+
+   public void setExecutor(final ArtemisExecutor fileExecutor) {
+      checkStarted(false, started);
       this.openFilesExecutor = fileExecutor;
    }
 
-   public void clear() throws Exception {
+   public void clear() {
       dataFiles.clear();
 
       freeFiles.clear();
@@ -200,6 +232,7 @@ public class JournalFilesRepository {
    }
 
    public void ensureMinFiles() throws Exception {
+      checkStarted(true, started);
       int filesToCreate = minFiles - (dataFiles.size() + freeFilesCount.get());
 
       if (filesToCreate > 0) {
@@ -213,6 +246,7 @@ public class JournalFilesRepository {
    }
 
    public void openFile(final JournalFile file, final boolean multiAIO) throws Exception {
+      checkStarted(true, started);
       if (multiAIO) {
          file.getFile().open();
       } else {
@@ -355,6 +389,7 @@ public class JournalFilesRepository {
    public synchronized void addFreeFile(final JournalFile file,
                                         final boolean renameTmp,
                                         final boolean checkDelete) throws Exception {
+      checkStarted(true, started);
       long calculatedSize = 0;
       try {
          calculatedSize = file.getFile().size();
@@ -431,6 +466,7 @@ public class JournalFilesRepository {
     * @throws ActiveMQIOErrorException In case the file could not be opened
     */
    public JournalFile openFile() throws InterruptedException, ActiveMQIOErrorException {
+      checkStarted(true, started);
       if (logger.isTraceEnabled()) {
          logger.trace("enqueueOpenFile with openedFiles.size=" + openedFiles.size());
       }
@@ -472,10 +508,12 @@ public class JournalFilesRepository {
    }
 
    private void pushOpen() {
-      if (openFilesExecutor == null) {
+      checkStarted(true, started);
+      final ArtemisExecutor executor = openFilesExecutor;
+      if (executor == null) {
          pushOpenRunnable.run();
       } else {
-         openFilesExecutor.execute(pushOpenRunnable);
+         executor.execute(pushOpenRunnable);
       }
    }
 
@@ -483,6 +521,7 @@ public class JournalFilesRepository {
     * Open a file and place it into the openedFiles queue
     */
    public synchronized void pushOpenedFile() throws Exception {
+      checkStarted(true, started);
       JournalFile nextOpenedFile = takeFile(true, true, true, false);
 
       if (logger.isTraceEnabled()) {
@@ -495,6 +534,7 @@ public class JournalFilesRepository {
    }
 
    public void closeFile(final JournalFile file) throws Exception {
+      checkStarted(true, started);
       fileFactory.deactivateBuffer();
       file.getFile().close();
       if (!dataFiles.contains(file)) {
@@ -555,6 +595,7 @@ public class JournalFilesRepository {
     * @param fileID the fileID to use when creating the file.
     */
    public JournalFile createRemoteBackupSyncFile(long fileID) throws Exception {
+      checkStarted(true, started);
       return createFile(false, false, true, false, fileID);
    }
 

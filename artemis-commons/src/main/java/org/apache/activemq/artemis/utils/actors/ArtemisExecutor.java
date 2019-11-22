@@ -20,6 +20,7 @@ package org.apache.activemq.artemis.utils.actors;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 public interface ArtemisExecutor extends Executor {
@@ -31,10 +32,21 @@ public interface ArtemisExecutor extends Executor {
     * @return
     */
    static ArtemisExecutor delegate(Executor executor) {
+      final AtomicLong executing = new AtomicLong(0);
+
       return new ArtemisExecutor() {
          @Override
          public void execute(Runnable command) {
-            executor.execute(command);
+            executing.getAndIncrement();
+            executor.execute(() -> {
+               executing.getAndDecrement();
+               command.run();
+            });
+         }
+
+         @Override
+         public boolean isEmpty() {
+            return executing.get() == 0;
          }
       };
    }
@@ -80,6 +92,13 @@ public interface ArtemisExecutor extends Executor {
    default void shutdown() {
    }
 
+   /**
+    * Returns {@code true} if there are remaining items left to be processed {@code false} otherwise.
+    * <p>
+    * This method is safe to be called by different threads and its accuracy is subject to concurrent modifications.<br>
+    * It's {@code O(1)} cost.
+    */
+   boolean isEmpty();
 
    /**
     * This will verify if the executor is flushed with no wait (or very minimal wait if not the {@link org.apache.activemq.artemis.utils.actors.OrderedExecutor}

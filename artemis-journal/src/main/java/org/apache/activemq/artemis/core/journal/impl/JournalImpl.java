@@ -78,6 +78,7 @@ import org.apache.activemq.artemis.utils.DataConstants;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
 import org.apache.activemq.artemis.utils.SimpleFuture;
 import org.apache.activemq.artemis.utils.SimpleFutureImpl;
+import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.apache.activemq.artemis.utils.actors.OrderedExecutorFactory;
 import org.apache.activemq.artemis.utils.collections.ConcurrentHashSet;
 import org.apache.activemq.artemis.utils.collections.ConcurrentLongHashMap;
@@ -188,11 +189,11 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
 
    private final AtomicBoolean compactorRunning = new AtomicBoolean();
 
-   private Executor filesExecutor = null;
+   private ArtemisExecutor filesExecutor = null;
 
-   private Executor compactorExecutor = null;
+   private ArtemisExecutor compactorExecutor = null;
 
-   private Executor appendExecutor = null;
+   private ArtemisExecutor appendExecutor = null;
 
    private final ConcurrentHashSet<CountDownLatch> latches = new ConcurrentHashSet<>();
 
@@ -2455,6 +2456,8 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
 
       fileFactory.start();
 
+      filesRepository.start();
+
       setJournalState(JournalState.STARTED);
    }
 
@@ -2494,7 +2497,8 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
          if (currentFile != null && currentFile.getFile().isOpen()) {
             currentFile.getFile().close();
          }
-         filesRepository.clear();
+
+         filesRepository.stop();
 
          fileFactory.stop();
 

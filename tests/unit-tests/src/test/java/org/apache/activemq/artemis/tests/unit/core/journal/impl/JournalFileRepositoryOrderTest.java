@@ -41,17 +41,16 @@ public class JournalFileRepositoryOrderTest extends ActiveMQTestBase {
    public void testOrder() throws Throwable {
       ExecutorService executorService = Executors.newFixedThreadPool(3, new ActiveMQThreadFactory("test", false, JournalFileRepositoryOrderTest.class.getClassLoader()));
       final AtomicBoolean running = new AtomicBoolean(true);
-      Thread t = null;
+      FakeSequentialFileFactory fakeSequentialFileFactory = new FakeSequentialFileFactory();
+      JournalImpl journal = new JournalImpl(new OrderedExecutorFactory(executorService), 10 * 1024, 2, -1, -1, 0, fakeSequentialFileFactory, "file", "file", 1, 0);
+      journal.start();
       try {
-         FakeSequentialFileFactory fakeSequentialFileFactory = new FakeSequentialFileFactory();
-         JournalImpl journal = new JournalImpl(new OrderedExecutorFactory(executorService), 10 * 1024, 2, -1, -1, 0, fakeSequentialFileFactory, "file", "file", 1, 0);
-
          final JournalFilesRepository repository = journal.getFilesRepository();
          final BlockingDeque<JournalFile> dataFiles = new LinkedBlockingDeque<>();
 
 
          // this is simulating how compating would return files into the journal
-         t = new Thread() {
+         final Thread t = new Thread() {
             @Override
             public void run() {
                while (running.get()) {
@@ -83,9 +82,10 @@ public class JournalFileRepositoryOrderTest extends ActiveMQTestBase {
             Assert.assertTrue(v.intValue() > previous);
             previous = v;
          }
-
-      } finally {
          running.set(false);
+         t.join();
+      } finally {
+         journal.stop();
          executorService.shutdownNow();
       }
 
