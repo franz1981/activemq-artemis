@@ -180,10 +180,7 @@ public class RefsOperation extends TransactionOperationAbstract {
    public void afterCommit(final Transaction tx) {
       for (MessageReference ref : refsToAck) {
          clearLingerRef(ref);
-
-         synchronized (ref.getQueue()) {
-            ref.getQueue().postAcknowledge(ref, reason);
-         }
+         ref.getQueue().postAcknowledge(ref, reason);
       }
 
       if (pagedMessagesToPostACK != null) {
