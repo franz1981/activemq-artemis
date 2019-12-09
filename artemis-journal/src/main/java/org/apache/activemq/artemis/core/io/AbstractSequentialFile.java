@@ -83,6 +83,7 @@ public abstract class AbstractSequentialFile implements SequentialFile {
 
    @Override
    public final boolean exists() {
+      AbstractSequentialFileFactory.injectPause();
       return file.exists();
    }
 
@@ -97,6 +98,7 @@ public abstract class AbstractSequentialFile implements SequentialFile {
          if (isOpen()) {
             close(false);
          }
+         AbstractSequentialFileFactory.injectPause();
          Files.deleteIfExists(file.toPath());
       } catch (Throwable t) {
          logger.trace("Fine error while deleting file", t);
@@ -156,6 +158,7 @@ public abstract class AbstractSequentialFile implements SequentialFile {
       File newFile = new File(directory + "/" + newFileName);
 
       if (!file.equals(newFile)) {
+         AbstractSequentialFileFactory.injectPause();
          if (!file.renameTo(newFile)) {
             throw ActiveMQJournalBundle.BUNDLE.ioRenameFileError(file.getName(), newFileName);
          }
