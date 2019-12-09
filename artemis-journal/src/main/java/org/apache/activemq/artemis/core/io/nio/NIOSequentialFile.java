@@ -31,6 +31,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.api.core.ActiveMQIOErrorException;
 import org.apache.activemq.artemis.api.core.ActiveMQIllegalStateException;
 import org.apache.activemq.artemis.core.io.AbstractSequentialFile;
+import org.apache.activemq.artemis.core.io.AbstractSequentialFileFactory;
 import org.apache.activemq.artemis.core.io.DelegateCallback;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.io.SequentialFile;
@@ -94,6 +95,7 @@ public class NIOSequentialFile extends AbstractSequentialFile {
    @Override
    public void open(final int maxIO, final boolean useExecutor) throws IOException {
       try {
+         AbstractSequentialFileFactory.injectPause();
          rfile = new RandomAccessFile(getFile(), "rw");
 
          channel = rfile.getChannel();
@@ -121,11 +123,13 @@ public class NIOSequentialFile extends AbstractSequentialFile {
                final int zeroPageLimit = Math.min(bytesToWrite, zeroPageCapacity);
                zeroPage.limit(zeroPageLimit);
                //use the cheaper pwrite instead of fseek + fwrite
+               AbstractSequentialFileFactory.injectPause();
                final int writtenBytes = channel.write(zeroPage, writePosition);
                bytesToWrite -= writtenBytes;
                writePosition += writtenBytes;
             }
             if (factory.isDatasync()) {
+               AbstractSequentialFileFactory.injectPause();
                channel.force(true);
             }
             //set the position to 0 to match the fill contract
@@ -155,8 +159,11 @@ public class NIOSequentialFile extends AbstractSequentialFile {
       try {
          try {
             if (channel != null) {
-               if (waitSync && factory.isDatasync())
+               if (waitSync && factory.isDatasync()) {
+                  AbstractSequentialFileFactory.injectPause();
                   channel.force(false);
+               }
+               AbstractSequentialFileFactory.injectPause();
                channel.close();
             }
          } finally {
@@ -221,6 +228,7 @@ public class NIOSequentialFile extends AbstractSequentialFile {
          if (channel == null) {
             throw new ActiveMQIllegalStateException("File " + this.getFileName() + " has a null channel");
          }
+         AbstractSequentialFileFactory.injectPause();
          final int bytesRead;
          if (bytes.hasArray()) {
             if (bytes.remaining() > CHUNK_SIZE) {
@@ -258,6 +266,7 @@ public class NIOSequentialFile extends AbstractSequentialFile {
    @Override
    public void sync() throws IOException {
       if (factory.isDatasync() && channel != null) {
+         AbstractSequentialFileFactory.injectPause();
          try {
             channel.force(false);
          } catch (ClosedChannelException e) {
@@ -376,6 +385,7 @@ public class NIOSequentialFile extends AbstractSequentialFile {
                                 final IOCallback callback,
                                 boolean releaseBuffer) throws IOException {
       try {
+         AbstractSequentialFileFactory.injectPause();
          if (bytes.hasArray()) {
             if (bytes.remaining() > CHUNK_SIZE) {
                writeRafInChunks(rfile, bytes.array(), bytes.arrayOffset() + bytes.position(), bytes.remaining());

@@ -27,7 +27,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 
 import org.apache.activemq.artemis.api.core.ActiveMQInterruptedException;
 import org.apache.activemq.artemis.core.io.buffer.TimedBuffer;
@@ -41,6 +43,29 @@ import org.jboss.logging.Logger;
  * An abstract SequentialFileFactory containing basic functionality for both AIO and NIO SequentialFactories
  */
 public abstract class AbstractSequentialFileFactory implements SequentialFileFactory {
+
+   private static final long STORAGE_NS_LATENCY = Long.getLong("storage.ns.latency", 0);
+   private static final int STORAGE_PERC_LATENCY = Integer.getInteger("storage.p.latency", 0);
+
+   public static void injectPause() {
+      if (STORAGE_PERC_LATENCY == 0) {
+         return;
+      }
+      if (ThreadLocalRandom.current().nextInt(100) <= STORAGE_PERC_LATENCY) {
+         //can hit spurious wakeups
+         long nanosLeft = STORAGE_NS_LATENCY;
+         while (nanosLeft > 0) {
+            final long start = System.nanoTime();
+            LockSupport.parkNanos(nanosLeft);
+            if (Thread.currentThread().isInterrupted()) {
+               //don't spin wait for nothing
+               return;
+            }
+            final long elapsed = System.nanoTime() - start;
+            nanosLeft -= elapsed;
+         }
+      }
+   }
 
    private static final Logger logger = Logger.getLogger(AbstractSequentialFileFactory.class);
 
@@ -240,6 +265,7 @@ public abstract class AbstractSequentialFileFactory implements SequentialFileFac
          }
       };
 
+      LockSupport.parkNanos(STORAGE_NS_LATENCY);
       String[] fileNames = journalDir.list(fnf);
 
       if (fileNames == null) {

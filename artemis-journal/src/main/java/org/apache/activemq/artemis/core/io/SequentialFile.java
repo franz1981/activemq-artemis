@@ -141,6 +141,7 @@ public interface SequentialFile {
    File getJavaFile();
 
    static long appendTo(Path src, Path dst) throws IOException {
+      AbstractSequentialFileFactory.injectPause();
       try (FileChannel srcChannel = FileChannel.open(src, StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
            FileLock srcLock = srcChannel.lock()) {
          final long readableBytes = srcChannel.size();
