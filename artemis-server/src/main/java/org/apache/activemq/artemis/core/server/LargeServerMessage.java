@@ -48,7 +48,7 @@ public interface LargeServerMessage extends ReplicatedLargeMessage, ICoreMessage
 
    void incrementDelayDeletionCount();
 
-   void decrementDelayDeletionCount() throws Exception;
+   void decrementDelayDeletionCount();
 
    /**
     * @return

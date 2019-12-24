@@ -18,6 +18,7 @@ package org.apache.activemq.artemis.core.paging.cursor.impl;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -426,8 +427,6 @@ public class PageCursorProviderImpl implements PageCursorProvider {
 
       logger.tracef("performing page cleanup %s", this);
 
-      ArrayList<Page> depagedPages = new ArrayList<>();
-
       while (true) {
          if (pagingStore.lock(100)) {
             break;
@@ -437,6 +436,8 @@ public class PageCursorProviderImpl implements PageCursorProvider {
       }
 
       logger.tracef("%s locked", this);
+
+      ArrayList<Page> depagedPages = null;
 
       synchronized (this) {
          try {
@@ -450,7 +451,7 @@ public class PageCursorProviderImpl implements PageCursorProvider {
 
             ArrayList<PageSubscription> cursorList = cloneSubscriptions();
 
-            long minPage = checkMinPage(cursorList);
+            final long minPage = checkMinPage(cursorList);
             deliverIfNecessary(cursorList, minPage);
 
             logger.debugf("Asserting cleanup for address %s, firstPage=%d", pagingStore.getAddress(), minPage);
@@ -479,6 +480,15 @@ public class PageCursorProviderImpl implements PageCursorProvider {
                if (page == null) {
                   break;
                }
+               if (depagedPages == null) {
+                  final int pages;
+                  if (minPage == Long.MAX_VALUE) {
+                     pages = pagingStore.getNumberOfPages() + 1;
+                  } else {
+                     pages = (int) (minPage - i);
+                  }
+                  depagedPages = new ArrayList<>(pages);
+               }
                depagedPages.add(page);
             }
 
@@ -486,11 +496,8 @@ public class PageCursorProviderImpl implements PageCursorProvider {
                pagingStore.stopPaging();
             } else {
                if (logger.isTraceEnabled()) {
-                  logger.trace("Couldn't cleanup page on address " + this.pagingStore.getAddress() +
-                                  " as numberOfPages == " +
-                                  pagingStore.getNumberOfPages() +
-                                  " and currentPage.numberOfMessages = " +
-                                  pagingStore.getCurrentPage().getNumberOfMessages());
+                  logger.tracef("Couldn't cleanup page on address %s as numberOfPages == %d and currentPage.numberOfMessages = %d",
+                                this.pagingStore.getAddress(), pagingStore.getNumberOfPages(), pagingStore.getCurrentPage().getNumberOfMessages());
                }
             }
          } catch (Exception ex) {
@@ -500,7 +507,7 @@ public class PageCursorProviderImpl implements PageCursorProvider {
             pagingStore.unlock();
          }
       }
-      finishCleanup(depagedPages);
+      finishCleanup(depagedPages == null ? Collections.emptyList() : depagedPages);
 
    }
 
@@ -521,18 +528,18 @@ public class PageCursorProviderImpl implements PageCursorProvider {
    }
 
    // Protected as a way to inject testing
-   protected void finishCleanup(ArrayList<Page> depagedPages) {
+   protected void finishCleanup(List<Page> depagedPages) {
       logger.tracef("this(%s) finishing cleanup on %s", this, depagedPages);
       try {
          for (Page depagedPage : depagedPages) {
             PageCache cache;
             PagedMessage[] pgdMessages;
             synchronized (softCache) {
-               cache = softCache.get((long) depagedPage.getPageId());
+               cache = softCache.get(depagedPage.getPageId());
             }
 
             if (logger.isTraceEnabled()) {
-               logger.trace("Removing pageNr=" + depagedPage.getPageId() + " from page-cache");
+               logger.tracef("Removing pageNr=%d from page-cache", depagedPage.getPageId());
             }
 
             if (cache == null) {
@@ -541,26 +548,28 @@ public class PageCursorProviderImpl implements PageCursorProvider {
                // to make sure we remove any large-messages pending
                storageManager.beforePageRead();
 
-               List<PagedMessage> pgdMessagesList = null;
+               final List<PagedMessage> pgdMessagesList;
                try {
                   depagedPage.open();
+                  //TODO we can improve Page::read by just reading the large messages OR by not reading anything if we know that there are none
                   pgdMessagesList = depagedPage.read(storageManager);
                } finally {
                   try {
                      depagedPage.close(false, false);
                   } catch (Exception e) {
+                     logger.warnf(e, "Closing page %d on file %s", depagedPage.getPageId(), depagedPage.getFile());
                   }
 
                   storageManager.afterPageRead();
                }
-               pgdMessages = pgdMessagesList.toArray(new PagedMessage[pgdMessagesList.size()]);
+               pgdMessages = pgdMessagesList.isEmpty() ? null : pgdMessagesList.toArray(new PagedMessage[pgdMessagesList.size()]);
             } else {
                pgdMessages = cache.getMessages();
             }
 
             depagedPage.delete(pgdMessages);
             synchronized (softCache) {
-               long pageId = (long) depagedPage.getPageId();
+               final long pageId = depagedPage.getPageId();
                softCache.remove(pageId);
                numberOfMessages.remove(pageId);
             }
@@ -680,7 +689,7 @@ public class PageCursorProviderImpl implements PageCursorProvider {
       }
 
       if (logger.isDebugEnabled()) {
-         logger.debug(this.pagingStore.getAddress() + " has minPage=" + minPage);
+         logger.debugf("%s has minPage=%d", pagingStore.getAddress(), minPage);
       }
 
       return minPage;

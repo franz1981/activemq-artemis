@@ -368,7 +368,7 @@ public class ScheduledDeliveryHandlerTest extends Assert {
       }
 
       @Override
-      public int decrementRefCount() throws Exception {
+      public int decrementRefCount() {
          return 0;
       }
 

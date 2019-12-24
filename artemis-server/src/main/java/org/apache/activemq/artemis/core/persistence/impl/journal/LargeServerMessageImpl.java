@@ -17,7 +17,6 @@
 package org.apache.activemq.artemis.core.persistence.impl.journal;
 
 import java.nio.ByteBuffer;
-import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
@@ -39,6 +38,7 @@ import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
 
 import io.netty.buffer.Unpooled;
+import org.jgroups.annotations.GuardedBy;
 
 public final class LargeServerMessageImpl extends CoreMessage implements LargeServerMessage {
 
@@ -86,10 +86,12 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
 
    private long bodySize = -1;
 
-   private final AtomicInteger delayDeletionCount = new AtomicInteger(0);
+   @GuardedBy("this")
+   private int delayDeletionCount = 0;
 
+   @GuardedBy("this")
    // We cache this
-   private volatile int memoryEstimate = -1;
+   private int memoryEstimate = -1;
 
    public LargeServerMessageImpl(final JournalStorageManager storageManager) {
       this.storageManager = storageManager;
@@ -190,7 +192,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
 
    @Override
    public synchronized void incrementDelayDeletionCount() {
-      delayDeletionCount.incrementAndGet();
+      delayDeletionCount++;
       try {
          if (paged) {
             RefCountMessageListener tmpContext = super.getContext();
@@ -207,8 +209,9 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
    }
 
    @Override
-   public synchronized void decrementDelayDeletionCount() throws Exception {
-      int count = delayDeletionCount.decrementAndGet();
+   public synchronized void decrementDelayDeletionCount() {
+      delayDeletionCount--;
+      final int count = delayDeletionCount;
 
       decrementRefCount();
 
@@ -223,10 +226,10 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
       return new DecodingContext();
    }
 
-   private void checkDelete() throws Exception {
+   private void checkDelete() {
       if (getRefCount() <= 0) {
          if (logger.isTraceEnabled()) {
-            logger.trace("Deleting file " + file + " as the usage was complete");
+            logger.tracef("Deleting file %s as the usage was complete", file);
          }
 
          try {
@@ -238,7 +241,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
    }
 
    @Override
-   public synchronized int decrementRefCount() throws Exception {
+   public synchronized int decrementRefCount() {
       int currentRefCount;
       if (paged) {
          RefCountMessageListener tmpContext = super.getContext();
@@ -252,7 +255,7 @@ public final class LargeServerMessageImpl extends CoreMessage implements LargeSe
       // We use <= as this could be used by load.
       // because of a failure, no references were loaded, so we have 0... and we still need to delete the associated
       // files
-      if (delayDeletionCount.get() <= 0) {
+      if (delayDeletionCount <= 0) {
          checkDelete();
       }
       return currentRefCount;

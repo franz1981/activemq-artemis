@@ -74,7 +74,7 @@ public abstract class RefCountMessage implements Message {
    }
 
    @Override
-   public int decrementRefCount() throws Exception {
+   public int decrementRefCount() {
       int count = REF_COUNT_UPDATER.decrementAndGet(this);
       if (context != null) {
          context.nonDurableDown(this, count);

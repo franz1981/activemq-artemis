@@ -440,7 +440,7 @@ public class AcknowledgeTest extends ActiveMQTestBase {
       }
 
       @Override
-      public int decrementRefCount() throws Exception {
+      public int decrementRefCount() {
          return 0;
       }
 

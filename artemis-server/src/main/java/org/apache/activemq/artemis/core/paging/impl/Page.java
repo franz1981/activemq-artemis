@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
@@ -482,33 +483,46 @@ public final class Page implements Comparable<Page> {
       return pageCache != null;
    }
 
-   public boolean delete(final PagedMessage[] messages) throws Exception {
+   private static int forEachLargeMessage(PagedMessage[] messages, Consumer<? super PagedMessage> onLargeMessage) {
+      int largeMessages = 0;
+      if (messages != null) {
+         for (PagedMessage msg : messages) {
+            if (msg.getMessage() instanceof ICoreMessage && (msg.getMessage()).isLargeMessage()) {
+               onLargeMessage.accept(msg);
+               largeMessages++;
+            }
+         }
+      }
+      return largeMessages;
+   }
+
+   /**
+    * It deletes the {@link #getFile()} associated to this page while
+    * {@link LargeServerMessage#decrementDelayDeletionCount} for each large message on {@code messages}.
+    * <br>
+    * It means that {@code messages} shouldn't contain all the messages read on this page, but just the large message
+    * ones, if any.
+    */
+   public boolean delete(final PagedMessage[] messages) {
       if (storageManager != null) {
          storageManager.pageDeleted(storeName, pageId);
       }
 
       if (logger.isDebugEnabled()) {
-         logger.debug("Deleting pageNr=" + pageId + " on store " + storeName);
+         logger.debugf("Deleting pageNr=%d on store %s", pageId, storeName);
       }
 
-      List<Long> largeMessageIds = new ArrayList<>();
-      if (messages != null) {
-         for (PagedMessage msg : messages) {
-            if (msg.getMessage() instanceof ICoreMessage && (msg.getMessage()).isLargeMessage()) {
-               LargeServerMessage lmsg = (LargeServerMessage) msg.getMessage();
-
-               // Remember, cannot call delete directly here
-               // Because the large-message may be linked to another message
-               // or it may still being delivered even though it has been acked already
-               lmsg.decrementDelayDeletionCount();
-               largeMessageIds.add(lmsg.getMessageID());
-            }
-         }
-      }
+      // Remember, cannot call delete directly here
+      // Because the large-message may be linked to another message
+      // or it may still being delivered even though it has been acked already
+      final int largeMessages = forEachLargeMessage(messages, msg -> ((LargeServerMessage) msg.getMessage()).decrementDelayDeletionCount());
 
       try {
-         if (!storageManager.waitOnOperations(5000)) {
-            ActiveMQServerLogger.LOGGER.timedOutWaitingForLargeMessagesDeletion(largeMessageIds);
+         //don't need to wait if there are no deleted large messages
+         if (largeMessages > 0 && !storageManager.waitOnOperations(5000)) {
+            final List<Long> largeMessagesIds = new ArrayList<>(largeMessages);
+            forEachLargeMessage(messages, msg -> largeMessagesIds.add(msg.getMessage().getMessageID()));
+            ActiveMQServerLogger.LOGGER.timedOutWaitingForLargeMessagesDeletion(largeMessagesIds);
          }
          if (suspiciousRecords) {
             ActiveMQServerLogger.LOGGER.pageInvalid(file.getFileName(), file.getFileName());
