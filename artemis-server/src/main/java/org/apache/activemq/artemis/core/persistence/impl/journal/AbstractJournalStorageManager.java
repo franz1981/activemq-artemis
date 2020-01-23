@@ -41,6 +41,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import javax.transaction.xa.Xid;
 
+import io.netty.util.collection.LongObjectHashMap;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.Message;
@@ -836,7 +837,7 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
 
       Set<PageTransactionInfo> invalidPageTransactions = new HashSet<>();
 
-      Map<Long, Message> messages = new HashMap<>();
+      LongObjectHashMap<Message> messages = new LongObjectHashMap<>(128);
       readLock();
       try {
 
@@ -913,19 +914,19 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
 
                      encoding.decode(buff);
 
-                     Map<Long, AddMessageRecord> queueMessages = queueMap.get(encoding.queueID);
-
-                     if (queueMessages == null) {
-                        queueMessages = new LinkedHashMap<>();
-
-                        queueMap.put(encoding.queueID, queueMessages);
-                     }
-
-                     Message message = messages.get(messageID);
+                     Message message = messages.remove(messageID);
 
                      if (message == null) {
                         ActiveMQServerLogger.LOGGER.cannotFindMessage(record.id);
                      } else {
+                        Map<Long, AddMessageRecord> queueMessages = queueMap.get(encoding.queueID);
+
+                        if (queueMessages == null) {
+                           queueMessages = new LinkedHashMap<>();
+
+                           queueMap.put(encoding.queueID, queueMessages);
+                        }
+
                         queueMessages.put(messageID, new AddMessageRecord(message));
                      }
 
@@ -1721,7 +1722,7 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
 
          List<MessageReference> referencesToAck = new ArrayList<>();
 
-         Map<Long, Message> messages = new HashMap<>();
+         LongObjectHashMap<Message> messages = new LongObjectHashMap<>();
 
          // Use same method as load message journal to prune out acks, so they don't get added.
          // Then have reacknowledge(tx) methods on queue, which needs to add the page size
@@ -1758,7 +1759,7 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
 
                   encoding.decode(buff);
 
-                  Message message = messages.get(messageID);
+                  Message message = messages.remove(messageID);
 
                   if (message == null) {
                      throw new IllegalStateException("Cannot find message with id " + messageID);
