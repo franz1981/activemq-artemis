@@ -25,12 +25,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
 import org.apache.activemq.artemis.core.io.IOCallback;
 import org.apache.activemq.artemis.core.persistence.impl.journal.OperationContextImpl;
-import org.apache.activemq.artemis.tests.util.ActiveMQTestBase;
 import org.apache.activemq.artemis.utils.ActiveMQThreadFactory;
 import org.junit.Assert;
 import org.junit.Test;
 
-public class OperationContextUnitTest extends ActiveMQTestBase {
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+
+public class OperationContextUnitTest {
 
    // Constants -----------------------------------------------------
 

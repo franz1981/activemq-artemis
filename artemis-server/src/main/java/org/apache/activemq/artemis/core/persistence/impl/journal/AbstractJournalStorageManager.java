@@ -273,7 +273,9 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
          ActiveMQServerLogger.LOGGER.serverIsStopped();
          throw new IllegalStateException("Server is stopped");
       }
-      return getContext().waitCompletion(timeout);
+      return OperationContextImpl.getExistingContext()
+         .orElse(DummyOperationContext.getInstance())
+         .waitCompletion(timeout);
    }
 
    @Override
@@ -298,12 +300,16 @@ public abstract class AbstractJournalStorageManager extends CriticalComponentImp
 
    @Override
    public void afterCompleteOperations(final IOCallback run) {
-      getContext().executeOnCompletion(run);
+      OperationContextImpl.getExistingContext()
+         .orElse(DummyOperationContext.getInstance())
+         .executeOnCompletion(run);
    }
 
    @Override
    public void afterStoreOperations(IOCallback run) {
-      getContext().executeOnCompletion(run, true);
+      OperationContextImpl.getExistingContext()
+         .orElse(DummyOperationContext.getInstance())
+         .executeOnCompletion(run, true);
    }
 
    @Override
