@@ -17,6 +17,7 @@
 package org.apache.activemq.artemis.tests.integration.cluster.failover;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
@@ -24,11 +25,15 @@ import org.apache.activemq.artemis.api.core.Pair;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.core.client.ClusterTopologyListener;
 import org.apache.activemq.artemis.api.core.client.TopologyMember;
+import org.apache.activemq.artemis.core.client.impl.TopologyMemberImpl;
 import org.apache.activemq.artemis.core.config.ha.ReplicaPolicyConfiguration;
 import org.apache.activemq.artemis.core.config.ha.ReplicatedPolicyConfiguration;
 import org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl;
+import org.apache.activemq.artemis.core.server.cluster.ClusterConnection;
+import org.apache.activemq.artemis.core.server.cluster.impl.MessageLoadBalancingType;
 import org.apache.activemq.artemis.core.server.impl.SharedNothingLiveActivation;
 import org.apache.activemq.artemis.tests.integration.cluster.util.BackupSyncDelay;
+import org.junit.Assert;
 import org.junit.Test;
 
 public class QuorumFailOverTest extends StaticClusterWithBackupFailoverTest {
@@ -98,6 +103,55 @@ public class QuorumFailOverTest extends StaticClusterWithBackupFailoverTest {
 
       failNode(1);
       assertFalse("4 should have failed over ", servers[4].getHAPolicy().isBackup());
+   }
+
+   @Test
+   public void testBackupTopologyOnFailover() throws Exception {
+      int[] liveServerIDs = new int[]{0, 1, 2};
+      setupCluster(MessageLoadBalancingType.OFF);
+      startServers(0, 1, 2);
+      startServers(3, 4, 5);
+
+      for (int i : liveServerIDs) {
+         waitForTopology(servers[i], 3, 3);
+      }
+
+      waitForFailoverTopology(3, 0, 1, 2);
+      waitForFailoverTopology(4, 0, 1, 2);
+      waitForFailoverTopology(5, 0, 1, 2);
+
+      // FAIL NODE IS TOO KIND: IT SHOULD REALLY CRASH THE CONNECTIONS, IF POSSIBLE.
+      // FAIL is calling freezeConnections(): that will send a DisconnectMessage_V2: is too kind!!
+      // The failure on the connection between the lives and the failing one should cause ClusterConnectionBridge::fail
+      // to send a ClusterTopologyChangeMessage_V2 to the slaves on the connection that the slaves have with their master:
+      // the slave will update their ClusterConnection::topology due to it.
+      servers[0].fail(false);
+
+      waitForFailoverTopology(1, 3, 1, 2);
+      waitForFailoverTopology(2, 3, 1, 2);
+      waitForFailoverTopology(3, 3, 1, 2);
+
+      assertTrue(servers[3].waitForActivation(15, TimeUnit.SECONDS));
+      assertFalse("3 should have failed over ", servers[3].getHAPolicy().isBackup());
+
+      checkTopology(4);
+      checkTopology(5);
+
+   }
+
+   private void checkTopology(int backup) {
+      Set<ClusterConnection> clusterConnections = servers[backup].getClusterManager().getClusterConnections();
+
+      Assert.assertEquals(1, clusterConnections.size());
+
+      TopologyMemberImpl member = clusterConnections.stream().findFirst().get().getTopology().getMember(servers[3].getNodeID().toString());
+
+      Assert.assertNotEquals(member.getLive(), member.getBackup());
+   }
+
+   @Override
+   protected boolean isNetty() {
+      return true;
    }
 
    @Test
