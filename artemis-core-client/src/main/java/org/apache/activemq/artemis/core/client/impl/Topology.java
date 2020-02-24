@@ -295,7 +295,7 @@ public final class Topology {
       return listenersCopy;
    }
 
-   boolean removeMember(final long uniqueEventID, final String nodeId) {
+   public boolean removeMember(final long uniqueEventID, final String nodeId) {
       TopologyMemberImpl member;
 
       synchronized (this) {
