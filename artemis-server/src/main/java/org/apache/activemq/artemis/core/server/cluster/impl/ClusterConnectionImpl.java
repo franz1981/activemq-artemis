@@ -23,6 +23,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
@@ -37,6 +38,7 @@ import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.core.client.ClientMessage;
 import org.apache.activemq.artemis.api.core.client.ClusterTopologyListener;
+import org.apache.activemq.artemis.api.core.client.ServerLocator;
 import org.apache.activemq.artemis.api.core.client.TopologyMember;
 import org.apache.activemq.artemis.api.core.management.CoreNotificationType;
 import org.apache.activemq.artemis.api.core.management.ManagementHelper;
@@ -173,6 +175,10 @@ public final class ClusterConnectionImpl implements ClusterConnection, AfterConn
 
    private final String storeAndForwardPrefix;
 
+   // it would receive the updates from the topology on the ClusterController server locator
+   // of this connection
+   private ClusterTopologyListener clusterTopologyListener;
+
    public ClusterConnectionImpl(final ClusterManager manager,
                                 final TransportConfiguration[] staticTranspConfigs,
                                 final TransportConfiguration connector,
@@ -281,6 +287,8 @@ public final class ClusterConnectionImpl implements ClusterConnection, AfterConn
       }
 
       this.storeAndForwardPrefix = server.getInternalNamingPrefix() + SN_PREFIX;
+
+      this.clusterTopologyListener = null;
    }
 
    public ClusterConnectionImpl(final ClusterManager manager,
@@ -381,6 +389,35 @@ public final class ClusterConnectionImpl implements ClusterConnection, AfterConn
       this.manager = manager;
 
       this.storeAndForwardPrefix = server.getInternalNamingPrefix() + SN_PREFIX;
+
+      this.clusterTopologyListener = null;
+   }
+
+   public void observeServerLocatorTopology() {
+      synchronized (this) {
+         if (started) {
+            throw new IllegalStateException("Cannot observe the server locator Topology changes while active!");
+         }
+         assert clusterTopologyListener == null;
+         final ClusterTopologyListener listener = new ClusterTopologyListener() {
+            @Override
+            public void nodeUP(TopologyMember member, boolean last) {
+               // TODO check for started/stopping?
+               assert member instanceof TopologyMemberImpl;
+               topology.updateMember(member.getUniqueEventID(), member.getNodeId(), (TopologyMemberImpl) member);
+            }
+
+            @Override
+            public void nodeDown(long eventUID, String nodeID) {
+               // TODO check for started/stopping?
+               topology.removeMember(eventUID, nodeID);
+            }
+         };
+         final ServerLocator serverLocator = manager.getClusterController().getServerLocator(name);
+         Objects.requireNonNull(serverLocator, "Cannot find the ServerLocator of " + name);
+         serverLocator.addClusterTopologyListener(listener);
+         clusterTopologyListener = listener;
+      }
    }
 
    @Override
@@ -389,7 +426,16 @@ public final class ClusterConnectionImpl implements ClusterConnection, AfterConn
          if (started) {
             return;
          }
-
+         final ClusterTopologyListener listener = clusterTopologyListener;
+         if (listener != null) {
+            try {
+               final ServerLocator serverLocator = manager.getClusterController().getServerLocator(name);
+               Objects.requireNonNull(serverLocator, "Cannot fine the ServerLocator of " + name);
+               serverLocator.removeClusterTopologyListener(listener);
+            } finally {
+               clusterTopologyListener = null;
+            }
+         }
          stopping = false;
          started = true;
          activate();
@@ -433,6 +479,9 @@ public final class ClusterConnectionImpl implements ClusterConnection, AfterConn
                record.close();
             } catch (Exception ignore) {
             }
+         }
+         if (clusterTopologyListener != null) {
+            manager.getClusterController().getServerLocator(name).removeClusterTopologyListener(clusterTopologyListener);
          }
       }
 
