@@ -24,6 +24,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.IntFunction;
 
 import org.apache.activemq.artemis.api.core.RoutingType;
 import org.apache.activemq.artemis.api.core.SimpleString;
@@ -328,6 +329,15 @@ public class AmqpClientTestSupport extends AmqpTestSupport {
                                RoutingType routingType,
                                boolean durable,
                                Map<String, Object> applicationProperties) throws Exception {
+      sendMessages(destinationName, count, routingType, durable, applicationProperties, null);
+   }
+
+   protected void sendMessages(String destinationName,
+                               int count,
+                               RoutingType routingType,
+                               boolean durable,
+                               Map<String, Object> applicationProperties,
+                               IntFunction<String> text) throws Exception {
       AmqpClient client = createAmqpClient();
       AmqpConnection connection = addConnection(client.connect());
       try {
@@ -343,6 +353,9 @@ public class AmqpClientTestSupport extends AmqpTestSupport {
             message.setDurable(durable);
             if (routingType != null) {
                message.setMessageAnnotation(AMQPMessageSupport.ROUTING_TYPE.toString(), routingType.getType());
+            }
+            if (text != null) {
+               message.setText(text.apply(i));
             }
             sender.send(message);
          }
