@@ -17,7 +17,10 @@
 
 package org.apache.activemq.artemis.core.paging.cursor.impl;
 
+import java.util.Arrays;
+
 import org.apache.activemq.artemis.api.core.ICoreMessage;
+import org.apache.activemq.artemis.api.core.Message;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.io.SequentialFileFactory;
@@ -113,15 +116,12 @@ public class PageReaderTest extends ActiveMQTestBase {
       Page page = new Page(new SimpleString("something"), new NullStorageManager(), factory, file, 10);
       page.open();
       SimpleString simpleDestination = new SimpleString("Test");
+      final int msgSize = 100;
+      final byte[] content = new byte[msgSize];
+      Arrays.fill(content, (byte) 'b');
       int[] offsets = new int[num];
       for (int i = 0; i < num; i++) {
-         ICoreMessage msg = new CoreMessage().setMessageID(i).initBuffer(1024);
-
-         for (int j = 0; j < 100; j++) {
-            msg.getBodyBuffer().writeByte((byte) 'b');
-         }
-
-         msg.setAddress(simpleDestination);
+         Message msg = createMessage(simpleDestination, i, content);
          offsets[i] = (int)page.getFile().position();
          page.write(new PagedMessageImpl(msg, new long[0]));
 
@@ -129,6 +129,17 @@ public class PageReaderTest extends ActiveMQTestBase {
       }
       page.close(false, false);
       return offsets;
+   }
+
+   protected Message createMessage(SimpleString address, int msgId, byte[] content) {
+      ICoreMessage msg = new CoreMessage().setMessageID(msgId).initBuffer(1024);
+
+      for (byte b : content) {
+         msg.getBodyBuffer().writeByte(b);
+      }
+
+      msg.setAddress(address);
+      return msg;
    }
 
    private PageReader getPageReader() throws Exception {
