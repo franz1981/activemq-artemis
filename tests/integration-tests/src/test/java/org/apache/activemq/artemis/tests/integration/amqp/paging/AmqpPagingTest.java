@@ -45,7 +45,7 @@ public class AmqpPagingTest extends AmqpClientTestSupport {
       receiver.flow(10);
       Assert.assertNull("somehow the queue had messages from a previous test", receiver.receiveNoWait());
       receiver.flow(0);
-      for (int i = 1; i < MSG_COUNT; i++) {
+      for (int i = 0; i < MSG_COUNT; i++) {
          AmqpMessage message = new AmqpMessage();
          message.setText(data);
          sender.send(message);
