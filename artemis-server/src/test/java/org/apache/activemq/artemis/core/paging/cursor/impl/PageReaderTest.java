@@ -61,7 +61,7 @@ public class PageReaderTest extends ActiveMQTestBase {
             int nextFileOffset = pagedMessage == null ? -1 : offsets[i - 1] + pagedMessage.getEncodeSize() + Page.SIZE_RECORD;
             PagePositionAndFileOffset startPosition = new PagePositionAndFileOffset(nextFileOffset, new PagePositionImpl(10, i - 1));
             PagePosition pagePosition = startPosition.nextPagePostion();
-            assertEquals(offsets[i], pagePosition.getFileOffset());
+            assertEquals("Message " + i + " has wrong offset", offsets[i], pagePosition.getFileOffset());
             pagedMessage = pageReader.getMessage(pagePosition);
          }
          assertNotNull(pagedMessage);
@@ -69,6 +69,30 @@ public class PageReaderTest extends ActiveMQTestBase {
          assertEquals(pagedMessages[i].getMessage().getMessageID(), i);
       }
 
+      pageReader.close();
+   }
+
+   @Test
+   public void testShortPageReadMessage() throws Exception {
+      recreateDirectory(getTestDir());
+      int num = 2;
+      int[] offsets = createPage(num);
+      PageReader pageReader = getPageReader();
+
+      PagedMessage[] pagedMessages = pageReader.getMessages();
+      assertEquals(pagedMessages.length, num);
+
+      PagePosition pagePosition = new PagePositionImpl(10, 0);
+      PagedMessage firstPagedMessage = pageReader.getMessage(pagePosition);
+      assertEquals("Message 0 has a wrong encodeSize", pagedMessages[0].getEncodeSize(), firstPagedMessage.getEncodeSize());
+      int nextFileOffset = offsets[0] + firstPagedMessage.getEncodeSize() + Page.SIZE_RECORD;
+      PagePositionAndFileOffset startPosition = new PagePositionAndFileOffset(nextFileOffset, new PagePositionImpl(10, 0));
+      PagePosition nextPagePosition = startPosition.nextPagePostion();
+      assertEquals("Message 1 has a wrong offset", offsets[1], nextPagePosition.getFileOffset());
+      PagedMessage pagedMessage = pageReader.getMessage(nextPagePosition);
+      assertNotNull(pagedMessage);
+      assertEquals(pagedMessage.getMessage().getMessageID(), 1);
+      assertEquals(pagedMessages[1].getMessage().getMessageID(), 1);
       pageReader.close();
    }
 
