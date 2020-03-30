@@ -276,6 +276,12 @@ public final class SharedNothingBackupActivation extends Activation {
                            logger.trace("Calling activeMQServer.stop() and start() to restart the server");
                         }
                         activeMQServer.stop();
+                        // a failure during fail-back catching up should perform a "clean" restart
+                        // ie setting the HAPolicy to null forces the server to reload the original
+                        // configuration
+                        if (attemptFailBack) {
+                           activeMQServer.setHAPolicy(null);
+                        }
                         activeMQServer.start();
                      } catch (Exception e) {
                         ActiveMQServerLogger.LOGGER.errorRestartingBackupServer(e, activeMQServer);
