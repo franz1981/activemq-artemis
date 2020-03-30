@@ -391,6 +391,10 @@ public interface ActiveMQServerLogger extends BasicLogger {
    void restartingAsBackupBasedOnQuorumVoteResults();
 
    @LogMessage(level = Logger.Level.INFO)
+   @Message(id = 221083, value = "Restarting as backup during replication before failing-back", format = Message.Format.MESSAGE_FORMAT)
+   void restartingAsBackupDuringReplicationBeforeFailingBack();
+
+   @LogMessage(level = Logger.Level.INFO)
    @Message(id = 221071, value = "Failing over based on quorum vote results.", format = Message.Format.MESSAGE_FORMAT)
    void failingOverBasedOnQuorumVoteResults();
 

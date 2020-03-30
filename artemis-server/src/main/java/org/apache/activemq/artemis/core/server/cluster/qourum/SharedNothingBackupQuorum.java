@@ -67,6 +67,8 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    private volatile boolean stopped = false;
 
    private final int quorumVoteWait;
+
+   private final boolean failback;
    /**
     * This is a safety net in case the live sends the first {@link ReplicationLiveIsStoppingMessage}
     * with code {@link org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ReplicationLiveIsStoppingMessage.LiveStopping#STOP_CALLED} and crashes before sending the second with
@@ -83,7 +85,8 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
                                     int quorumSize,
                                     int voteRetries,
                                     long voteRetryWait,
-                                    int quorumVoteWait) {
+                                    int quorumVoteWait,
+                                    boolean failback) {
       this.storageManager = storageManager;
       this.scheduledPool = scheduledPool;
       this.quorumSize = quorumSize;
@@ -93,6 +96,7 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       this.voteRetries = voteRetries;
       this.voteRetryWait = voteRetryWait;
       this.quorumVoteWait = quorumVoteWait;
+      this.failback = failback;
    }
 
    private volatile BACKUP_ACTIVATION signal;
@@ -118,7 +122,12 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
             }
             return;
          }
-         if (!isLiveDown()) {
+         // loosing connection during fail-back won't need any quorum vote:
+         // the journal of master has to be up-to-date with the slave (ie the actual live) to restart as live.
+         if (failback) {
+            ActiveMQServerLogger.LOGGER.restartingAsBackupDuringReplicationBeforeFailingBack();
+            signal = BACKUP_ACTIVATION.FAILURE_REPLICATING;
+         } else if (!isLiveDown()) {
             //lost connection but don't know if live is down so restart as backup as we can't replicate any more
             ActiveMQServerLogger.LOGGER.restartingAsBackupBasedOnQuorumVoteResults();
             signal = BACKUP_ACTIVATION.FAILURE_REPLICATING;
