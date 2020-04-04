@@ -21,11 +21,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
-import org.apache.activemq.artemis.api.core.TransportConfiguration;
 import org.apache.activemq.artemis.api.core.client.SessionFailureListener;
 import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryInternal;
 import org.apache.activemq.artemis.core.client.impl.Topology;
-import org.apache.activemq.artemis.core.persistence.StorageManager;
 import org.apache.activemq.artemis.core.protocol.core.CoreRemotingConnection;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ReplicationLiveIsStoppingMessage;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
@@ -33,8 +31,6 @@ import org.apache.activemq.artemis.core.server.NetworkHealthCheck;
 import org.apache.activemq.artemis.core.server.NodeManager;
 
 public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener {
-
-   private TransportConfiguration liveTransportConfiguration;
 
    public enum BACKUP_ACTIVATION {
       FAIL_OVER, FAILURE_REPLICATING, ALREADY_REPLICATING, STOP;
@@ -46,7 +42,6 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
 
    private final NodeManager nodeManager;
 
-   private final StorageManager storageManager;
    private final ScheduledExecutorService scheduledPool;
    private final int quorumSize;
 
@@ -55,8 +50,6 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    private final long voteRetryWait;
 
    private final Object voteGuard = new Object();
-
-   private CountDownLatch latch;
 
    private ClientSessionFactoryInternal sessionFactory;
 
@@ -67,6 +60,12 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    private volatile boolean stopped = false;
 
    private final int quorumVoteWait;
+
+   private volatile BACKUP_ACTIVATION signal;
+
+   private CountDownLatch signalChanged;
+
+   private final Object onConnectionFailureGuard = new Object();
    /**
     * This is a safety net in case the live sends the first {@link ReplicationLiveIsStoppingMessage}
     * with code {@link org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ReplicationLiveIsStoppingMessage.LiveStopping#STOP_CALLED} and crashes before sending the second with
@@ -76,18 +75,16 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    public static final int WAIT_TIME_AFTER_FIRST_LIVE_STOPPING_MSG = 60;
 
-   public SharedNothingBackupQuorum(StorageManager storageManager,
-                                    NodeManager nodeManager,
+   public SharedNothingBackupQuorum(NodeManager nodeManager,
                                     ScheduledExecutorService scheduledPool,
                                     NetworkHealthCheck networkHealthCheck,
                                     int quorumSize,
                                     int voteRetries,
                                     long voteRetryWait,
                                     int quorumVoteWait) {
-      this.storageManager = storageManager;
       this.scheduledPool = scheduledPool;
       this.quorumSize = quorumSize;
-      this.latch = new CountDownLatch(1);
+      this.signalChanged = new CountDownLatch(1);
       this.nodeManager = nodeManager;
       this.networkHealthCheck = networkHealthCheck;
       this.voteRetries = voteRetries;
@@ -95,23 +92,14 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       this.quorumVoteWait = quorumVoteWait;
    }
 
-   private volatile BACKUP_ACTIVATION signal;
-
-   /**
-    * safety parameter to make _sure_ we get out of await()
-    */
-   private static final int LATCH_TIMEOUT = 30;
-
-   private final Object decisionGuard = new Object();
-
    @Override
    public String getName() {
       return "SharedNothingBackupQuorum";
    }
 
-   public void decideOnAction(Topology topology) {
-      //we may get called via multiple paths so need to guard
-      synchronized (decisionGuard) {
+   private void onConnectionFailure() {
+      //we may get called as sessionFactory or connection listener
+      synchronized (onConnectionFailureGuard) {
          if (signal == BACKUP_ACTIVATION.FAIL_OVER) {
             if (networkHealthCheck != null && !networkHealthCheck.check()) {
                signal = BACKUP_ACTIVATION.FAILURE_REPLICATING;
@@ -140,16 +128,13 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
                signal = BACKUP_ACTIVATION.FAILURE_REPLICATING;
             }
          }
+         signalChanged.countDown();
       }
-      latch.countDown();
    }
 
    public void liveIDSet(String liveID) {
       targetServerID = liveID;
       nodeManager.setNodeID(liveID);
-      liveTransportConfiguration = quorumManager.getLiveTransportConfiguration(targetServerID);
-      //now we are replicating we can start waiting for disconnect notifications so we can fail over
-      // sessionFactory.addFailureListener(this);
    }
 
    @Override
@@ -166,14 +151,12 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    @Override
    public void nodeDown(Topology topology, long eventUID, String nodeID) {
-      if (targetServerID.equals(nodeID)) {
-         decideOnAction(topology);
-      }
+      //noop: we are NOT interested on topology info coming from connections != this.connection
    }
 
    @Override
    public void nodeUp(Topology topology) {
-      //noop
+      //noop: we are NOT interested on topology info coming from connections != this.connection
    }
 
    /**
@@ -181,7 +164,7 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    @Override
    public void connectionFailed(ActiveMQException exception, boolean failedOver) {
-      decideOnAction(sessionFactory.getServerLocator().getTopology());
+      onConnectionFailure();
    }
 
    @Override
@@ -204,10 +187,10 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    public void setSessionFactory(final ClientSessionFactoryInternal sessionFactory) {
       this.sessionFactory = sessionFactory;
-      this.connection = (CoreRemotingConnection) sessionFactory.getConnection();
-      connection.addFailureListener(this);
       //belts and braces, there are circumstances where the connection listener doesn't get called but the session does.
-      sessionFactory.addFailureListener(this);
+      this.sessionFactory.addFailureListener(this);
+      connection = (CoreRemotingConnection) sessionFactory.getConnection();
+      connection.addFailureListener(this);
    }
 
    /**
@@ -220,10 +203,10 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       removeListener();
       signal = BACKUP_ACTIVATION.FAIL_OVER;
       if (finalMessage == ReplicationLiveIsStoppingMessage.LiveStopping.FAIL_OVER) {
-         latch.countDown();
+         signalChanged.countDown();
       }
       if (finalMessage == ReplicationLiveIsStoppingMessage.LiveStopping.STOP_CALLED) {
-         final CountDownLatch localLatch = latch;
+         final CountDownLatch localLatch = signalChanged;
          scheduledPool.schedule(new Runnable() {
             @Override
             public void run() {
@@ -236,17 +219,20 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
 
    public void notifyRegistrationFailed() {
       signal = BACKUP_ACTIVATION.FAILURE_REPLICATING;
-      latch.countDown();
+      signalChanged.countDown();
    }
 
    public void notifyAlreadyReplicating() {
       signal = BACKUP_ACTIVATION.ALREADY_REPLICATING;
-      latch.countDown();
+      signalChanged.countDown();
    }
 
    private void removeListener() {
       if (connection != null) {
          connection.removeFailureListener(this);
+      }
+      if (sessionFactory != null) {
+         sessionFactory.removeFailureListener(this);
       }
    }
 
@@ -258,7 +244,7 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    public BACKUP_ACTIVATION waitForStatusChange() {
       try {
-         latch.await();
+         signalChanged.await();
       } catch (InterruptedException e) {
          return BACKUP_ACTIVATION.STOP;
       }
@@ -274,11 +260,11 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       stopped = true;
       removeListener();
       this.signal = explicitSignal;
-      latch.countDown();
+      signalChanged.countDown();
    }
 
    public synchronized void reset() {
-      latch = new CountDownLatch(1);
+      signalChanged = new CountDownLatch(1);
    }
 
    /**
