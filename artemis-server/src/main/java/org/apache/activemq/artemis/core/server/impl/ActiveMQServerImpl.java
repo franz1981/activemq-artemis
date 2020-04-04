@@ -821,7 +821,11 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    @Override
    public void setHAPolicy(HAPolicy haPolicy) {
       if (logger.isTraceEnabled()) {
-         logger.tracef("XXX @@@ Setting %s, isBackup=%s at %s", haPolicy, haPolicy.isBackup(), this);
+         if (haPolicy != null) {
+            logger.tracef("XXX @@@ Setting %s, isBackup=%s at %s", haPolicy, haPolicy.isBackup(), this);
+         } else {
+            logger.tracef("XXX @@@ Clearing at %s", this);
+         }
       }
       this.haPolicy = haPolicy;
    }

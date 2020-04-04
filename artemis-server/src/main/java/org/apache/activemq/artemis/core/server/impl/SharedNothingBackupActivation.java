@@ -131,7 +131,7 @@ public final class SharedNothingBackupActivation extends Activation {
             logger.trace("Entered a synchronized");
             if (closed)
                return;
-            backupQuorum = new SharedNothingBackupQuorum(activeMQServer.getNodeManager(), activeMQServer.getScheduledPool(), networkHealthCheck, replicaPolicy.getQuorumSize(), replicaPolicy.getVoteRetries(), replicaPolicy.getVoteRetryWait(), replicaPolicy.getQuorumVoteWait());
+            backupQuorum = new SharedNothingBackupQuorum(activeMQServer.getNodeManager(), activeMQServer.getScheduledPool(), networkHealthCheck, replicaPolicy.getQuorumSize(), replicaPolicy.getVoteRetries(), replicaPolicy.getVoteRetryWait(), replicaPolicy.getQuorumVoteWait(), attemptFailBack);
             activeMQServer.getClusterManager().getQuorumManager().registerQuorum(backupQuorum);
             activeMQServer.getClusterManager().getQuorumManager().registerQuorumHandler(new ServerConnectVoteHandler(activeMQServer));
          }
@@ -275,7 +275,12 @@ public final class SharedNothingBackupActivation extends Activation {
                         if (logger.isTraceEnabled()) {
                            logger.trace("Calling activeMQServer.stop() and start() to restart the server");
                         }
-                        activeMQServer.stop();
+                        // leave the console available
+                        activeMQServer.stop(!attemptFailBack);
+                        if (attemptFailBack) {
+                           // clearing it up will make it to reload from the configuration
+                           activeMQServer.setHAPolicy(null);
+                        }
                         activeMQServer.start();
                      } catch (Exception e) {
                         ActiveMQServerLogger.LOGGER.errorRestartingBackupServer(e, activeMQServer);
