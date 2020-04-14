@@ -62,6 +62,9 @@
             <include>org.apache.activemq.rest:artemis-rest</include>
             <include>org.apache.qpid:qpid-jms-client</include>
             <include>io.micrometer:micrometer-core</include>
+            <!-- quorum -->
+            <include>org.apache.activemq:artemis-quorum-api</include>
+            <include>org.apache.activemq:artemis-quorum-ri</include>
 
             <!-- dependencies -->
             <include>jakarta.jms:jakarta.jms-api</include>
@@ -80,6 +83,7 @@
             <include>org.slf4j:slf4j-api</include>
             <include>io.airlift:airline</include>
             <include>com.google.guava:guava</include>
+            <include>com.google.guava:failureaccess</include>
             <include>jakarta.inject:jakarta.inject-api</include>
             <include>org.eclipse.jetty.aggregate:jetty-all:jar:uber</include>
             <include>org.apache.tomcat:tomcat-servlet-api</include>
@@ -97,6 +101,21 @@
             <include>com.sun.xml.bind:jaxb-impl</include>
             <include>jakarta.activation:jakarta.activation-api</include>
             <include>jakarta.security.auth.message:jakarta.security.auth.message-api</include>
+            <!-- quorum -->
+            <include>io.atomix:atomix</include>
+            <include>io.atomix:atomix-raft</include>
+            <include>io.atomix:atomix-cluster</include>
+            <include>io.atomix:atomix-primitive</include>
+            <include>io.atomix:atomix-storage</include>
+            <include>io.atomix:atomix-utils</include>
+            <include>org.apache.commons:commons-math3</include>
+            <include>com.esotericsoftware:kryo</include>
+            <include>com.esotericsoftware:reflectasm</include>
+            <include>org.ow2.asm:asm</include>
+            <include>com.esotericsoftware:minlog</include>
+            <include>org.objenesis:objenesis</include>
+            <include>com.typesafe:config</include>
+            <include>io.github.classgraph:classgraph</include>
          </includes>
          <!--excludes>
             <exclude>org.apache.activemq:artemis-website</exclude>
