@@ -82,6 +82,19 @@
          <artifactId>activemq-artemis-native</artifactId>
          <version>${activemq-artemis-native-version}</version>
       </dependency>
+      <!-- start election service deps -->
+      <dependency>
+         <groupId>org.apache.activemq</groupId>
+         <artifactId>artemis-quorum-api</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+      <!-- TODO: use a SPI to save this explitic declaration -->
+      <dependency>
+         <groupId>org.apache.activemq</groupId>
+         <artifactId>artemis-quorum-ri</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+      <!-- end election service deps -->
       <dependency>
          <groupId>org.apache.activemq</groupId>
          <artifactId>artemis-core-client</artifactId>

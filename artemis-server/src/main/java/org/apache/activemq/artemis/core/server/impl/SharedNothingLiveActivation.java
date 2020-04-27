@@ -17,6 +17,7 @@
 package org.apache.activemq.artemis.core.server.impl;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -38,7 +39,6 @@ import org.apache.activemq.artemis.api.core.client.TopologyMember;
 import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryInternal;
 import org.apache.activemq.artemis.core.client.impl.ServerLocatorInternal;
 import org.apache.activemq.artemis.core.config.ClusterConnectionConfiguration;
-import org.apache.activemq.artemis.core.config.Configuration;
 import org.apache.activemq.artemis.core.config.ConfigurationUtils;
 import org.apache.activemq.artemis.core.protocol.core.Channel;
 import org.apache.activemq.artemis.core.protocol.core.ChannelHandler;
@@ -57,7 +57,8 @@ import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.NodeManager;
 import org.apache.activemq.artemis.core.server.cluster.ClusterConnection;
 import org.apache.activemq.artemis.core.server.cluster.ha.ReplicatedPolicy;
-import org.apache.activemq.artemis.core.server.cluster.qourum.QuorumManager;
+import org.apache.activemq.artemis.quorum.Election;
+import org.apache.activemq.artemis.quorum.ElectionManager;
 import org.apache.activemq.artemis.spi.core.remoting.Acceptor;
 import org.jboss.logging.Logger;
 
@@ -70,11 +71,14 @@ public class SharedNothingLiveActivation extends LiveActivation {
 
    private ActiveMQServerImpl activeMQServer;
 
+   private final ElectionManager electionManager;
+
    private ReplicationManager replicationManager;
 
    private final Object replicationLock = new Object();
 
    public SharedNothingLiveActivation(ActiveMQServerImpl activeMQServer, ReplicatedPolicy replicatedPolicy) {
+      this.electionManager = activeMQServer.getElectionManager();
       this.activeMQServer = activeMQServer;
       this.replicatedPolicy = replicatedPolicy;
    }
@@ -96,24 +100,40 @@ public class SharedNothingLiveActivation extends LiveActivation {
 
    @Override
    public void run() {
+      Election election = null;
       try {
-         if (replicatedPolicy.isCheckForLiveServer() && isNodeIdUsed()) {
-            //set for when we failback
-            if (logger.isTraceEnabled()) {
-               logger.tracef("@@@ setting up replicatedPolicy.getReplicaPolicy for back start, replicaPolicy::%s, isBackup=%s, server=%s", replicatedPolicy.getReplicaPolicy(), replicatedPolicy.isBackup(), activeMQServer);
+         // TODO can use final SimpleString nodeId = activeMQServer.getNodeID(); instead?
+         final SimpleString nodeID = activeMQServer.getNodeManager().readNodeId();
+         assert nodeID != null;
+         election = electionManager.joinOrCreateElection(nodeID.toString());
+         do {
+            if (replicatedPolicy.isCheckForLiveServer() && isNodeIdUsed(nodeID)) {
+               // no need to ask to the election manager if we can already find some node
+               //set for when we failback
+               if (logger.isTraceEnabled()) {
+                  logger.tracef("@@@ setting up replicatedPolicy.getReplicaPolicy for back start, replicaPolicy::%s, isBackup=%s, server=%s", replicatedPolicy.getReplicaPolicy(), replicatedPolicy.isBackup(), activeMQServer);
+               }
+               replicatedPolicy.getReplicaPolicy().setReplicatedPolicy(replicatedPolicy);
+               activeMQServer.setHAPolicy(replicatedPolicy.getReplicaPolicy());
+               electionManager.leaveElection(election);
+               return;
             }
-            replicatedPolicy.getReplicaPolicy().setReplicatedPolicy(replicatedPolicy);
-            activeMQServer.setHAPolicy(replicatedPolicy.getReplicaPolicy());
-            return;
          }
+         while (!election.tryWin());
 
          logger.trace("@@@ did not do it now");
 
          activeMQServer.initialisePart1(false);
 
-         activeMQServer.getClusterManager().getQuorumManager().registerQuorumHandler(new ServerConnectVoteHandler(activeMQServer));
+
+         // activeMQServer.getClusterManager().getQuorumManager().registerQuorumHandler(new ServerConnectVoteHandler(activeMQServer));
 
          activeMQServer.initialisePart2(false);
+
+         // TODO Checking again if we're still live after loading the journal: what to do next?
+         if (!election.isWinner()) {
+            throw new ActiveMQIllegalStateException("This server is not live anymore: activation is failed");
+         }
 
          activeMQServer.completeActivation();
 
@@ -123,6 +143,13 @@ public class SharedNothingLiveActivation extends LiveActivation {
             ActiveMQServerLogger.LOGGER.serverIsLive();
          }
       } catch (Exception e) {
+         if (election != null) {
+            try {
+               electionManager.leaveElection(election);
+            } catch (Throwable t) {
+               logger.warn("Error while leaving the current election after an activation failure", t);
+            }
+         }
          ActiveMQServerLogger.LOGGER.initializationError(e);
          activeMQServer.callActivationFailureListeners(e);
       }
@@ -183,9 +210,17 @@ public class SharedNothingLiveActivation extends LiveActivation {
                   //backupUpToDate = false;
 
                   if (isFailBackRequest && replicatedPolicy.isAllowAutoFailBack()) {
-                     BackupTopologyListener listener1 = new BackupTopologyListener(activeMQServer.getNodeID().toString(), clusterConnection.getConnector());
-                     clusterConnection.addClusterTopologyListener(listener1);
-                     if (listener1.waitForBackup()) {
+                     assert activeMQServer.getNodeID() != null;
+                     final String nodeID = activeMQServer.getNodeID().toString();
+                     BackupTopologyListener listener = new BackupTopologyListener(nodeID, clusterConnection.getConnector());
+                     clusterConnection.addClusterTopologyListener(listener);
+                     if (listener.waitForBackup()) {
+                        clusterConnection.removeClusterTopologyListener(listener);
+                        try {
+                           electionManager.leaveElection(electionManager.joinOrCreateElection(nodeID));
+                        } catch (Throwable t) {
+                           logger.warn("Error while resigning as live, but restarting as backup anyway.", t);
+                        }
                         //if we have to many backups kept or are not configured to restart just stop, otherwise restart as a backup
                         activeMQServer.fail(true);
                         ActiveMQServerLogger.LOGGER.restartingReplicatedBackupAfterFailback();
@@ -193,6 +228,7 @@ public class SharedNothingLiveActivation extends LiveActivation {
                         activeMQServer.setHAPolicy(replicatedPolicy.getReplicaPolicy());
                         activeMQServer.start();
                      } else {
+                        clusterConnection.removeClusterTopologyListener(listener);
                         ActiveMQServerLogger.LOGGER.failbackMissedBackupAnnouncement();
                      }
                   }
@@ -223,13 +259,6 @@ public class SharedNothingLiveActivation extends LiveActivation {
       }
    }
 
-   private static TransportConfiguration getLiveConnector(Configuration configuration) {
-      String connectorName = configuration.getClusterConfigurations().get(0).getConnectorName();
-      TransportConfiguration transportConfiguration = configuration.getConnectorConfigurations().get(connectorName);
-      assert transportConfiguration != null;
-      return transportConfiguration;
-   }
-
    private final class ReplicationFailureListener implements FailureListener, CloseListener {
 
       @Override
@@ -258,13 +287,24 @@ public class SharedNothingLiveActivation extends LiveActivation {
                         activeMQServer.getStorageManager().stopReplication();
                         replicationManager = null;
 
-                        if (failed && replicatedPolicy.isVoteOnReplicationFailure()) {
-                           QuorumManager quorumManager = activeMQServer.getClusterManager().getQuorumManager();
-                           final boolean isStillLive = quorumManager.isStillLive(activeMQServer.getNodeID().toString(),
-                                                                                 getLiveConnector(activeMQServer.getConfiguration()),
-                                                                                 replicatedPolicy.getQuorumSize(),
-                                                                                 5, TimeUnit.SECONDS);
+                        if (failed) {
+                           assert activeMQServer.getNodeID() != null;
+                           final String nodeID =  activeMQServer.getNodeID().toString();
+                           boolean isStillLive = false;
+                           // the election should be already populated ie cannot fail to join it
+                           final Election election = electionManager.joinOrCreateElection(nodeID);
+                           try {
+                              isStillLive = election.isWinner();
+                           } catch (Throwable t) {
+                              // do not trust any local decision
+                              logger.warnf(t, "Impossible check which node is live with node ID: %s", nodeID);
+                           }
                            if (!isStillLive) {
+                              try {
+                                 electionManager.leaveElection(election);
+                              } catch (Throwable t) {
+                                 logger.warn(t);
+                              }
                               try {
                                  Thread startThread = new Thread(new Runnable() {
                                     @Override
@@ -309,19 +349,13 @@ public class SharedNothingLiveActivation extends LiveActivation {
     *
     * @throws Exception
     */
-   private boolean isNodeIdUsed() throws Exception {
+   private boolean isNodeIdUsed(SimpleString nodeID) throws Exception {
+      Objects.requireNonNull(nodeID, "nodeID");
       if (activeMQServer.getConfiguration().getClusterConfigurations().isEmpty())
          return false;
-      SimpleString nodeId0;
-      try {
-         nodeId0 = activeMQServer.getNodeManager().readNodeId();
-      } catch (ActiveMQIllegalStateException e) {
-         nodeId0 = null;
-      }
-
       ClusterConnectionConfiguration config = ConfigurationUtils.getReplicationClusterConfiguration(activeMQServer.getConfiguration(), replicatedPolicy.getClusterName());
 
-      NodeIdListener listener = new NodeIdListener(nodeId0, activeMQServer.getConfiguration().getClusterUser(), activeMQServer.getConfiguration().getClusterPassword());
+      NodeIdListener listener = new NodeIdListener(nodeID, activeMQServer.getConfiguration().getClusterUser(), activeMQServer.getConfiguration().getClusterPassword());
 
       try (ServerLocatorInternal locator = getLocator(config)) {
          locator.addClusterTopologyListener(listener);

@@ -258,6 +258,9 @@ public final class ActiveMQDefaultConfiguration {
    // the directory to store the journal files in
    private static String DEFAULT_JOURNAL_DIR = "data/journal";
 
+   // the directory to store the quorum journal files in (if any)
+   private static String DEFAULT_QUORUM_DIR = "data/quorum";
+
    // true means that the journal directory will be created
    private static boolean DEFAULT_CREATE_JOURNAL_DIR = true;
 
@@ -898,6 +901,13 @@ public final class ActiveMQDefaultConfiguration {
     */
    public static String getDefaultJournalDir() {
       return DEFAULT_JOURNAL_DIR;
+   }
+
+   /**
+    * the directory to store the quorum files in (if any)
+    */
+   public static String getDefaultQuorumDir() {
+      return DEFAULT_QUORUM_DIR;
    }
 
    /**

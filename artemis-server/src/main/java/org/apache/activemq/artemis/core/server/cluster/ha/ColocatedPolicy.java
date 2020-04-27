@@ -64,6 +64,11 @@ public class ColocatedPolicy implements HAPolicy<LiveActivation> {
    }
 
    @Override
+   public boolean isColocated() {
+      return true;
+   }
+
+   @Override
    public String getBackupGroupName() {
       final HAPolicy<LiveActivation> livePolicy = this.livePolicy;
       if (livePolicy == null) {

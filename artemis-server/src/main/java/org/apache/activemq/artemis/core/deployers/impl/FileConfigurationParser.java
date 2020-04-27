@@ -1489,6 +1489,7 @@ public final class FileConfigurationParser extends XMLConfigurationUtil {
                   Element colocatedNode = (Element) colocatedNodeList.item(0);
                   mainConfig.setHAPolicyConfiguration(createColocatedHaPolicy(colocatedNode, true));
                }
+               mainConfig.setQuorumNodes(haNode.getAttribute("quorum-nodes"));
             } else if (haNode.getTagName().equals("shared-store")) {
                NodeList masterNodeList = e.getElementsByTagName("master");
                if (masterNodeList.getLength() > 0) {

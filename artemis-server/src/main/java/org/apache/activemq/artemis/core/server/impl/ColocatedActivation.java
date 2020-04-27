@@ -67,10 +67,11 @@ public class ColocatedActivation extends LiveActivation {
 
    @Override
    public void haStarted() {
-      server.getClusterManager().getQuorumManager().registerQuorumHandler(new RequestBackupQuorumVoteHandler());
+      // TODO DEPRECATE
+      //server.getClusterManager().getQuorumManager().registerQuorumHandler(new RequestBackupQuorumVoteHandler());
       //vote for a backup if required
       if (colocatedPolicy.isRequestBackup()) {
-         server.getClusterManager().getQuorumManager().vote(new RequestBackupQuorumVote());
+         //server.getClusterManager().getQuorumManager().vote(new RequestBackupQuorumVote());
       }
    }
 
@@ -215,7 +216,8 @@ public class ColocatedActivation extends LiveActivation {
                   server.getScheduledPool().schedule(new Runnable() {
                      @Override
                      public void run() {
-                        server.getClusterManager().getQuorumManager().vote(new RequestBackupQuorumVote());
+                        // TODO DEPRECATE
+                        //server.getClusterManager().getQuorumManager().vote(new RequestBackupQuorumVote());
                      }
                   }, colocatedPolicy.getBackupRequestRetryInterval(), TimeUnit.MILLISECONDS);
                }
@@ -227,7 +229,8 @@ public class ColocatedActivation extends LiveActivation {
             server.getScheduledPool().schedule(new Runnable() {
                @Override
                public void run() {
-                  server.getClusterManager().getQuorumManager().vote(RequestBackupQuorumVote.this);
+                  // TODO DEPRECATE
+                  //server.getClusterManager().getQuorumManager().vote(RequestBackupQuorumVote.this);
                }
             }, colocatedPolicy.getBackupRequestRetryInterval(), TimeUnit.MILLISECONDS);
          }

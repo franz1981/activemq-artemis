@@ -18,6 +18,7 @@ package org.apache.activemq.artemis.quorum.atomix;
 
 import java.io.File;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
@@ -34,6 +35,16 @@ public final class AtomixElectionManager implements ElectionManager {
    private final String localMemberId;
    private Atomix atomix;
    private AtomixElection liveElection;
+
+   public AtomixElectionManager(File atomixFolder, LinkedHashMap<String, Address> nodes) {
+      final Map.Entry<String, Address> localNode = nodes.entrySet().stream().findFirst().get();
+      this.atomixFolder = atomixFolder;
+      this.nodes = new HashMap<>(nodes);
+      this.localMemberId = localNode.getKey();
+      this.address = localNode.getValue();
+      this.atomix = null;
+      this.liveElection = null;
+   }
 
    public AtomixElectionManager(String localMemberId,
                                 Address address,
@@ -60,6 +71,7 @@ public final class AtomixElectionManager implements ElectionManager {
    @Override
    public CompletableFuture<?> stop() {
       if (this.atomix != null) {
+         // TODO automatically close it?
          if (this.liveElection != null) {
             throw new IllegalStateException("cannot stop this service without leaving the live election first");
          }

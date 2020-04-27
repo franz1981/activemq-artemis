@@ -71,7 +71,9 @@
             <include>org.apache.activemq.rest:artemis-rest</include>
             <include>org.apache.qpid:qpid-jms-client</include>
             <include>io.micrometer:micrometer-core</include>
-
+            <!-- quorum -->
+            <include>org.apache.activemq:artemis-quorum-api</include>
+            <include>org.apache.activemq:artemis-quorum-ri</include>
             <!-- dependencies -->
             <include>org.apache.geronimo.specs:geronimo-jms_2.0_spec</include>
             <include>org.apache.geronimo.specs:geronimo-annotation_1.1_spec</include>
@@ -108,6 +110,21 @@
             <include>com.sun.xml.bind:jaxb-core</include>
             <include>javax.activation:activation</include>
             <include>org.apache.geronimo.specs:geronimo-jaspic_1.0_spec</include>
+            <!-- quorum -->
+            <include>io.atomix:atomix</include>
+            <include>io.atomix:atomix-raft</include>
+            <include>io.atomix:atomix-cluster</include>
+            <include>io.atomix:atomix-primitive</include>
+            <include>io.atomix:atomix-storage</include>
+            <include>io.atomix:atomix-utils</include>
+            <include>org.apache.commons:commons-math3</include>
+            <include>com.esotericsoftware:kryo</include>
+            <include>com.esotericsoftware:reflectasm</include>
+            <include>org.ow2.asm:asm</include>
+            <include>com.esotericsoftware:minlog</include>
+            <include>org.objenesis:objenesis</include>
+            <include>com.typesafe:config</include>
+            <include>io.github.classgraph:classgraph</include>
          </includes>
          <!--excludes>
             <exclude>org.apache.activemq:artemis-website</exclude>

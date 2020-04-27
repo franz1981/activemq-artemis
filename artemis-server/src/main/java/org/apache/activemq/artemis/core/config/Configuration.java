@@ -642,6 +642,22 @@ public interface Configuration {
    Configuration setJournalDirectory(String dir);
 
    /**
+    * Sets the file system directory used to store quorum files (if any).
+    */
+   Configuration setQuorumDirectory(String dir);
+
+   /**
+    * Get the file system directory used to store quorum files (if any).<br>
+    * Default value is {@link org.apache.activemq.artemis.api.config.ActiveMQDefaultConfiguration#DEFAULT_QUORUM_DIR}.
+    */
+   String getQuorumDirectory();
+
+   /**
+    * The location of the quorum files (if any) related to artemis.instance.
+    */
+   File getQuorumLocation();
+
+   /**
     * Returns the type of journal used by this server ({@code NIO}, {@code ASYNCIO} or {@code MAPPED}).
     * <br>
     * Default value is ASYNCIO.
@@ -1119,6 +1135,10 @@ public interface Configuration {
    HAPolicyConfiguration getHAPolicyConfiguration();
 
    Configuration setHAPolicyConfiguration(HAPolicyConfiguration haPolicyConfiguration);
+
+   String getQuorumNodes();
+
+   Configuration setQuorumNodes(String quorumNodes);
 
    /**
     * Set the Artemis instance relative folder for data and stuff.

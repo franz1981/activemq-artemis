@@ -71,6 +71,7 @@ import org.apache.activemq.artemis.core.settings.HierarchicalRepository;
 import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
 import org.apache.activemq.artemis.core.transaction.ResourceManager;
 import org.apache.activemq.artemis.core.version.Version;
+import org.apache.activemq.artemis.quorum.ElectionManager;
 import org.apache.activemq.artemis.spi.core.protocol.ProtocolManagerFactory;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
@@ -109,6 +110,7 @@ public interface ActiveMQServer extends ServiceComponent {
       STOPPED
    }
 
+   ElectionManager getElectionManager();
 
    void setState(SERVER_STATE state);
 

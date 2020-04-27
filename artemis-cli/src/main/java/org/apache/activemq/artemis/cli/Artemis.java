@@ -51,6 +51,7 @@ import org.apache.activemq.artemis.cli.commands.queue.DeleteQueue;
 import org.apache.activemq.artemis.cli.commands.queue.HelpQueue;
 import org.apache.activemq.artemis.cli.commands.queue.PurgeQueue;
 import org.apache.activemq.artemis.cli.commands.queue.UpdateQueue;
+import org.apache.activemq.artemis.cli.commands.quorum.QuorumWitness;
 import org.apache.activemq.artemis.cli.commands.tools.HelpData;
 import org.apache.activemq.artemis.cli.commands.tools.PrintData;
 import org.apache.activemq.artemis.cli.commands.tools.journal.CompactJournal;
@@ -156,6 +157,9 @@ public class Artemis {
    private static Cli.CliBuilder<Action> builder(File artemisInstance) {
       String instance = artemisInstance != null ? artemisInstance.getAbsolutePath() : System.getProperty("artemis.instance");
       Cli.CliBuilder<Action> builder = Cli.<Action>builder("artemis").withDescription("ActiveMQ Artemis Command Line").withCommand(HelpAction.class).withCommand(Producer.class).withCommand(Consumer.class).withCommand(Browse.class).withCommand(Mask.class).withDefaultCommand(HelpAction.class);
+
+      builder.withGroup("quorum").withDescription("Quorum tools group (witness) (example ./artemis quorum witness)")
+         .withDefaultCommand(QuorumWitness.class).withCommands(QuorumWitness.class);
 
       builder.withGroup("check").withDescription("Check tools group (node|queue) (example ./artemis check node)").
          withDefaultCommand(HelpCheck.class).withCommands(NodeCheck.class, QueueCheck.class);

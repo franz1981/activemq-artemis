@@ -56,4 +56,8 @@ public interface HAPolicy<T extends Activation> {
 
    String getScaleDownClustername();
 
+   default boolean isColocated() {
+      return false;
+   }
+
 }

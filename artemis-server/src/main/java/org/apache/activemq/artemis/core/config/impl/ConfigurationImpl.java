@@ -191,6 +191,8 @@ public class ConfigurationImpl implements Configuration, Serializable {
 
    protected String journalDirectory = ActiveMQDefaultConfiguration.getDefaultJournalDir();
 
+   protected String quorumDirectory = ActiveMQDefaultConfiguration.getDefaultQuorumDir();
+
    protected String nodeManagerLockDirectory = null;
 
    protected boolean createJournalDir = ActiveMQDefaultConfiguration.isDefaultCreateJournalDir();
@@ -345,6 +347,8 @@ public class ConfigurationImpl implements Configuration, Serializable {
    private long criticalAnalyzerCheckPeriod = 0; // non set
 
    private int pageSyncTimeout = ActiveMQDefaultConfiguration.getDefaultJournalBufferTimeoutNio();
+
+   private String quorumNodes;
 
    /**
     * Parent folder for all data folders.
@@ -874,6 +878,22 @@ public class ConfigurationImpl implements Configuration, Serializable {
    public ConfigurationImpl setJournalDirectory(final String dir) {
       journalDirectory = dir;
       return this;
+   }
+
+   @Override
+   public String getQuorumDirectory() {
+      return quorumDirectory;
+   }
+
+   @Override
+   public ConfigurationImpl setQuorumDirectory(String quorumDirectory) {
+      this.quorumDirectory = quorumDirectory;
+      return this;
+   }
+
+   @Override
+   public File getQuorumLocation() {
+      return subFolder(getQuorumDirectory());
    }
 
    @Override
@@ -2237,6 +2257,17 @@ public class ConfigurationImpl implements Configuration, Serializable {
    @Override
    public ConfigurationImpl setHAPolicyConfiguration(HAPolicyConfiguration haPolicyConfiguration) {
       this.haPolicyConfiguration = haPolicyConfiguration;
+      return this;
+   }
+
+   @Override
+   public String getQuorumNodes() {
+      return quorumNodes;
+   }
+
+   @Override
+   public Configuration setQuorumNodes(String quorumNodes) {
+      this.quorumNodes = quorumNodes;
       return this;
    }
 

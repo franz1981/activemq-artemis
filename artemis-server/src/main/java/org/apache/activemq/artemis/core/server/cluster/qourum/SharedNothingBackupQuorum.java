@@ -22,17 +22,20 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.client.ClusterTopologyListener;
 import org.apache.activemq.artemis.api.core.client.SessionFailureListener;
+import org.apache.activemq.artemis.api.core.client.TopologyMember;
 import org.apache.activemq.artemis.core.client.impl.ClientSessionFactoryInternal;
-import org.apache.activemq.artemis.core.client.impl.Topology;
 import org.apache.activemq.artemis.core.protocol.core.CoreRemotingConnection;
 import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ReplicationLiveIsStoppingMessage;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.NetworkHealthCheck;
 import org.apache.activemq.artemis.core.server.NodeManager;
+import org.apache.activemq.artemis.quorum.Election;
+import org.apache.activemq.artemis.quorum.ElectionManager;
 import org.jboss.logging.Logger;
 
-public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener {
+public class SharedNothingBackupQuorum implements ClusterTopologyListener, SessionFailureListener {
 
    private static final Logger LOGGER = Logger.getLogger(SharedNothingBackupQuorum.class);
 
@@ -40,14 +43,11 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       FAIL_OVER, FAILURE_REPLICATING, ALREADY_REPLICATING, STOP;
    }
 
-   private QuorumManager quorumManager;
-
    private String targetServerID = "";
 
    private final NodeManager nodeManager;
 
    private final ScheduledExecutorService scheduledPool;
-   private final int quorumSize;
 
    private final int voteRetries;
 
@@ -62,8 +62,6 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    private final NetworkHealthCheck networkHealthCheck;
 
    private volatile boolean stopped = false;
-
-   private final int quorumVoteWait;
 
    private volatile BACKUP_ACTIVATION signal;
 
@@ -83,28 +81,23 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
     */
    public static final int WAIT_TIME_AFTER_FIRST_LIVE_STOPPING_MSG = 60;
 
-   public SharedNothingBackupQuorum(NodeManager nodeManager,
+   private final ElectionManager electionManager;
+
+   public SharedNothingBackupQuorum(ElectionManager electionManager,
+                                    NodeManager nodeManager,
                                     ScheduledExecutorService scheduledPool,
                                     NetworkHealthCheck networkHealthCheck,
-                                    int quorumSize,
                                     int voteRetries,
                                     long voteRetryWait,
-                                    int quorumVoteWait,
                                     boolean failback) {
+      this.electionManager = electionManager;
       this.scheduledPool = scheduledPool;
-      this.quorumSize = quorumSize;
       this.latch = new CountDownLatch(1);
       this.nodeManager = nodeManager;
       this.networkHealthCheck = networkHealthCheck;
       this.voteRetries = voteRetries;
       this.voteRetryWait = voteRetryWait;
-      this.quorumVoteWait = quorumVoteWait;
       this.failback = failback;
-   }
-
-   @Override
-   public String getName() {
-      return "SharedNothingBackupQuorum";
    }
 
    private void onConnectionFailure() {
@@ -152,19 +145,7 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    }
 
    @Override
-   public void setQuorumManager(QuorumManager quorumManager) {
-      this.quorumManager = quorumManager;
-   }
-
-   /**
-    * if the node going down is the node we are replicating from then decide on an action.
-    *
-    * @param topology
-    * @param eventUID
-    * @param nodeID
-    */
-   @Override
-   public void nodeDown(Topology topology, long eventUID, String nodeID) {
+   public void nodeDown(long eventUID, String nodeID) {
       // ignore it during a failback:
       // a failing slave close all connections but the one used for replication
       // triggering a nodeDown before the restarted master receive a STOP_CALLED from it.
@@ -175,7 +156,7 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    }
 
    @Override
-   public void nodeUp(Topology topology) {
+   public void nodeUP(TopologyMember member, boolean last) {
       //noop: we are NOT interested on topology info coming from connections != this.connection
    }
 
@@ -195,11 +176,6 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
    @Override
    public void beforeReconnect(ActiveMQException exception) {
       //noop
-   }
-
-   @Override
-   public void close() {
-      causeExit(BACKUP_ACTIVATION.STOP);
    }
 
    /**
@@ -311,6 +287,10 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       latch = new CountDownLatch(1);
    }
 
+   public String getTargetServerID() {
+      return this.targetServerID;
+   }
+
    /**
     * we need to vote on the quorum to decide if we should become live
     *
@@ -321,20 +301,30 @@ public class SharedNothingBackupQuorum implements Quorum, SessionFailureListener
       if (stopped) {
          return false;
       }
-      final int size = quorumSize == -1 ? quorumManager.getMaxClusterSize() : quorumSize;
 
       synchronized (voteGuard) {
-         for (int voteAttempts = 0; voteAttempts < voteRetries && !stopped; voteAttempts++) {
-            if (voteAttempts > 0) {
+         final String targetServerID = this.targetServerID;
+         final Election election = electionManager.joinOrCreateElection(targetServerID);
+         try {
+            for (int voteAttempts = 0; voteAttempts < voteRetries && !stopped; voteAttempts++) {
+               if (voteAttempts > 0) {
+                  try {
+                     voteGuard.wait(voteRetryWait);
+                  } catch (InterruptedException e) {
+                     //nothing to do here
+                  }
+               }
                try {
-                  voteGuard.wait(voteRetryWait);
-               } catch (InterruptedException e) {
-                  //nothing to do here
+                  if (!election.hasWinner()) {
+                     return true;
+                  }
+               } catch (Throwable t) {
+                  // not being able to know this information does mean we cannot assume live to be down!
+                  LOGGER.warn("Unable to retrieve live status: cannot assume live is down", t);
                }
             }
-            if (!quorumManager.hasLive(targetServerID, size, quorumVoteWait, TimeUnit.SECONDS)) {
-               return true;
-            }
+         } finally {
+            electionManager.leaveElection(election);
          }
       }
       return false;

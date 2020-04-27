@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.activemq.artemis.api.core.ActiveMQException;
+import org.apache.activemq.artemis.api.core.ActiveMQIllegalStateException;
 import org.apache.activemq.artemis.api.core.ActiveMQInternalErrorException;
 import org.apache.activemq.artemis.api.core.Pair;
 import org.apache.activemq.artemis.api.core.TransportConfiguration;
@@ -46,6 +47,8 @@ import org.apache.activemq.artemis.core.server.cluster.ha.ScaleDownPolicy;
 import org.apache.activemq.artemis.core.server.cluster.qourum.SharedNothingBackupQuorum;
 import org.apache.activemq.artemis.core.server.group.GroupingHandler;
 import org.apache.activemq.artemis.core.server.management.ManagementService;
+import org.apache.activemq.artemis.quorum.Election;
+import org.apache.activemq.artemis.quorum.ElectionManager;
 import org.apache.activemq.artemis.utils.ReusableLatch;
 import org.jboss.logging.Logger;
 
@@ -131,9 +134,8 @@ public final class SharedNothingBackupActivation extends Activation {
             logger.trace("Entered a synchronized");
             if (closed)
                return;
-            backupQuorum = new SharedNothingBackupQuorum(activeMQServer.getNodeManager(), activeMQServer.getScheduledPool(), networkHealthCheck, replicaPolicy.getQuorumSize(), replicaPolicy.getVoteRetries(), replicaPolicy.getVoteRetryWait(), replicaPolicy.getQuorumVoteWait(), attemptFailBack);
-            activeMQServer.getClusterManager().getQuorumManager().registerQuorum(backupQuorum);
-            activeMQServer.getClusterManager().getQuorumManager().registerQuorumHandler(new ServerConnectVoteHandler(activeMQServer));
+            backupQuorum = new SharedNothingBackupQuorum(activeMQServer.getElectionManager(), activeMQServer.getNodeManager(), activeMQServer.getScheduledPool(), networkHealthCheck, replicaPolicy.getVoteRetries(), replicaPolicy.getVoteRetryWait(), attemptFailBack);
+            activeMQServer.getClusterManager().getClusterController().addClusterTopologyListener(backupQuorum);
          }
 
          //use a Node Locator to connect to the cluster
@@ -261,6 +263,24 @@ public final class SharedNothingBackupActivation extends Activation {
                if (logger.isTraceEnabled()) {
                   logger.trace("signal == FAIL_OVER, breaking the loop");
                }
+               // this node is going to became the live: let's see if we're allowed to failover for real
+               if (isRemoteBackupUpToDate()) {
+                  // TODO understand the scaling down case
+                  assert backupQuorum.getTargetServerID().equals(nodeID);
+                  ElectionManager electionManager = activeMQServer.getElectionManager();
+                  final Election election = electionManager.joinOrCreateElection(backupQuorum.getTargetServerID());
+                  if (!election.tryWin()) {
+                     electionManager.leaveElection(election);
+                     // wa cannot successfully failover, maybe worth re-attempting searching for the actual live
+                     clusterControl.close();
+                     backupQuorum.reset();
+                     if (replicationEndpoint.getChannel() != null) {
+                        replicationEndpoint.getChannel().close();
+                        replicationEndpoint.setChannel(null);
+                     }
+                     continue;
+                  }
+               }
                break;
             } else if (signal == SharedNothingBackupQuorum.BACKUP_ACTIVATION.FAILURE_REPLICATING) {
                // something has gone badly run restart from scratch
@@ -303,7 +323,7 @@ public final class SharedNothingBackupActivation extends Activation {
             logger.trace("Activation loop finished, current signal = " + signal);
          }
 
-         activeMQServer.getClusterManager().getQuorumManager().unRegisterQuorum(backupQuorum);
+         activeMQServer.getClusterManager().getClusterController().removeClusterTopologyListener(backupQuorum);
 
          if (!isRemoteBackupUpToDate()) {
             logger.debug("throwing exception for !isRemoteBackupUptoDate");
@@ -337,7 +357,21 @@ public final class SharedNothingBackupActivation extends Activation {
                activeMQServer.setActivation(new SharedNothingLiveActivation(activeMQServer, replicaPolicy.getReplicatedPolicy()));
                logger.trace("initialize part 2");
                activeMQServer.initialisePart2(false);
-
+               // TODO Checking again if we're still live after loading the journal: what to do next?
+               assert nodeID != null;
+               final Election election = activeMQServer.getElectionManager().joinOrCreateElection(nodeID);
+               try {
+                  if (!election.isWinner()) {
+                     throw new ActiveMQIllegalStateException("This server is not live anymore: activation is failed");
+                  }
+               } catch (Throwable t) {
+                  try {
+                     activeMQServer.getElectionManager().leaveElection(election);
+                  } catch (Throwable leaveThrowable) {
+                     logger.warn("Error while leaving the current election after an activation failure", t);
+                     throw t;
+                  }
+               }
                if (activeMQServer.getIdentity() != null) {
                   ActiveMQServerLogger.LOGGER.serverIsLive(activeMQServer.getIdentity());
                } else {

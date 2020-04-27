@@ -18,7 +18,6 @@ package org.apache.activemq.artemis.quorum.atomix;
 
 import java.io.File;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 

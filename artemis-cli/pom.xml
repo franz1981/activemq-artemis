@@ -78,6 +78,17 @@
          <artifactId>artemis-dto</artifactId>
          <version>${project.version}</version>
       </dependency>
+      <!-- quorum -->
+      <dependency>
+         <groupId>org.apache.activemq</groupId>
+         <artifactId>artemis-quorum-api</artifactId>
+         <version>${project.version}</version>
+      </dependency>
+      <dependency>
+         <groupId>org.apache.activemq</groupId>
+         <artifactId>artemis-quorum-ri</artifactId>
+         <version>${project.version}</version>
+      </dependency>
       <dependency>
          <groupId>javax.inject</groupId>
          <artifactId>javax.inject</artifactId>

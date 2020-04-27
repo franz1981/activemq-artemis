@@ -49,7 +49,6 @@ import org.apache.activemq.artemis.core.protocol.core.impl.wireformat.ScaleDownA
 import org.apache.activemq.artemis.core.server.ActiveMQComponent;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
-import org.apache.activemq.artemis.core.server.cluster.qourum.QuorumManager;
 import org.apache.activemq.artemis.core.server.impl.Activation;
 import org.apache.activemq.artemis.spi.core.remoting.Acceptor;
 import org.jboss.logging.Logger;
@@ -60,8 +59,6 @@ import org.jboss.logging.Logger;
 public class ClusterController implements ActiveMQComponent {
 
    private static final Logger logger = Logger.getLogger(ClusterController.class);
-
-   private final QuorumManager quorumManager;
 
    private final ActiveMQServer server;
 
@@ -83,7 +80,6 @@ public class ClusterController implements ActiveMQComponent {
    public ClusterController(ActiveMQServer server, ScheduledExecutorService scheduledExecutor) {
       this.server = server;
       executor = server.getExecutorFactory().getExecutor();
-      quorumManager = new QuorumManager(scheduledExecutor, this);
    }
 
    @Override
@@ -107,15 +103,6 @@ public class ClusterController implements ActiveMQComponent {
       }
       //latch so we know once we are connected
       replicationClusterConnectedLatch = new CountDownLatch(1);
-      //and add the quorum manager as a topology listener
-      if (defaultLocator != null) {
-         defaultLocator.addClusterTopologyListener(quorumManager);
-      }
-
-      if (quorumManager != null) {
-         //start the quorum manager
-         quorumManager.start();
-      }
 
       started = true;
       //connect all the locators in a separate thread
@@ -124,6 +111,26 @@ public class ClusterController implements ActiveMQComponent {
             executor.execute(new ConnectRunnable(serverLocatorInternal));
          }
       }
+   }
+
+   /**
+    * It adds {@code clusterTopologyListener} to {@code defaultLocator}.
+    */
+   public void addClusterTopologyListener(ClusterTopologyListener clusterTopologyListener) {
+      if (!this.started || defaultLocator == null) {
+         throw new IllegalStateException("the controller must be started and with a locator initialized");
+      }
+      this.defaultLocator.addClusterTopologyListener(clusterTopologyListener);
+   }
+
+   /**
+    * It remove {@code clusterTopologyListener} from {@code defaultLocator}.
+    */
+   public void removeClusterTopologyListener(ClusterTopologyListener clusterTopologyListener) {
+      if (!this.started || defaultLocator == null) {
+         throw new IllegalStateException("the controller must be started and with a locator initialized");
+      }
+      this.defaultLocator.removeClusterTopologyListener(clusterTopologyListener);
    }
 
    @Override
@@ -137,17 +144,11 @@ public class ClusterController implements ActiveMQComponent {
       for (ServerLocatorInternal serverLocatorInternal : locators.values()) {
          serverLocatorInternal.close();
       }
-      //stop the quorum manager
-      quorumManager.stop();
    }
 
    @Override
    public boolean isStarted() {
       return started;
-   }
-
-   public QuorumManager getQuorumManager() {
-      return quorumManager;
    }
 
    //set the default cluster connections name
@@ -393,8 +394,6 @@ public class ClusterController implements ActiveMQComponent {
                } else {
                   logger.debug("there is no acceptor used configured at the CoreProtocolManager " + this);
                }
-            } else if (packet.getType() == PacketImpl.QUORUM_VOTE) {
-               quorumManager.handleQuorumVote(clusterChannel, packet);
             } else if (packet.getType() == PacketImpl.SCALEDOWN_ANNOUNCEMENT) {
                ScaleDownAnnounceMessage message = (ScaleDownAnnounceMessage) packet;
                //we don't really need to check as it should always be true

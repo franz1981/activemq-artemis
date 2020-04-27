@@ -74,7 +74,6 @@ import org.apache.activemq.artemis.core.server.ActiveMQMessageBundle;
 import org.apache.activemq.artemis.core.server.ActiveMQServer;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.cluster.ClusterManager;
-import org.apache.activemq.artemis.core.server.cluster.qourum.QuorumManager;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.apache.activemq.artemis.utils.ExecutorFactory;
 import org.apache.activemq.artemis.utils.ReusableLatch;
@@ -657,10 +656,7 @@ public final class ReplicationManager implements ActiveMQComponent {
                   try {
                      ClusterManager clusterManager = server.getClusterManager();
                      if (clusterManager != null) {
-                        QuorumManager manager = clusterManager.getQuorumManager();
-                        if (criticalErrorListener != null && manager != null && manager.getMaxClusterSize() <= 2) {
-                           criticalErrorListener.onIOException(exception, exception.getMessage(), null);
-                        }
+                        criticalErrorListener.onIOException(exception, exception.getMessage(), null);
                      }
                   } catch (Throwable e) {
                      // if NPE or anything else, continue as nothing changed

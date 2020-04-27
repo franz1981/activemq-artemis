@@ -142,6 +142,7 @@ import org.apache.activemq.artemis.core.server.ServiceRegistry;
 import org.apache.activemq.artemis.core.server.cluster.BackupManager;
 import org.apache.activemq.artemis.core.server.cluster.ClusterManager;
 import org.apache.activemq.artemis.core.server.cluster.ha.HAPolicy;
+import org.apache.activemq.artemis.core.server.cluster.ha.LiveOnlyPolicy;
 import org.apache.activemq.artemis.core.server.federation.FederationManager;
 import org.apache.activemq.artemis.core.server.files.FileMoveManager;
 import org.apache.activemq.artemis.core.server.files.FileStoreMonitor;
@@ -180,6 +181,9 @@ import org.apache.activemq.artemis.core.transaction.ResourceManager;
 import org.apache.activemq.artemis.core.transaction.impl.ResourceManagerImpl;
 import org.apache.activemq.artemis.core.version.Version;
 import org.apache.activemq.artemis.logs.AuditLogger;
+import org.apache.activemq.artemis.quorum.ElectionManager;
+import org.apache.activemq.artemis.quorum.atomix.AtomixConfiguration;
+import org.apache.activemq.artemis.quorum.atomix.AtomixElectionManager;
 import org.apache.activemq.artemis.spi.core.protocol.ProtocolManagerFactory;
 import org.apache.activemq.artemis.spi.core.protocol.RemotingConnection;
 import org.apache.activemq.artemis.spi.core.protocol.SessionCallback;
@@ -274,6 +278,8 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    private volatile ActiveMQServerControlImpl messagingServerControl;
 
    private volatile ClusterManager clusterManager;
+
+   private ElectionManager electionManager;
 
    private volatile BackupManager backupManager;
 
@@ -564,6 +570,15 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
       if (haPolicy == null) {
          haPolicy = ConfigurationUtils.getHAPolicy(configuration.getHAPolicyConfiguration(), this);
+      }
+
+      // TODO this could happen directly into the shared nothing live/backup activations
+      if (haPolicy != null && !(haPolicy instanceof LiveOnlyPolicy) && !haPolicy.isSharedStore() && !haPolicy.isColocated() && electionManager == null) {
+         // TODO change it into a SPI-friendly config and allow retro-compatibility
+         electionManager = new AtomixElectionManager(configuration.getQuorumLocation(), AtomixConfiguration.parseNodes(configuration.getQuorumNodes()));
+         /* TODO this is not elegant: some quorum provider won't start until they have a majority of connected nodes:
+                 probably would be better to provide some mechanism to check later the status of this*/
+         electionManager.start().join();
       }
 
       activationLatch.setCount(1);
@@ -1281,6 +1296,19 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          }
       }
 
+      // TODO is the right place to do it?
+      if (isShutdown) {
+         final ElectionManager electionManager = this.electionManager;
+         this.electionManager = null;
+         if (electionManager != null) {
+            try {
+               electionManager.stop().join();
+            } catch (Throwable t) {
+               logger.warn("Cannot stop the election manager", t);
+            }
+         }
+      }
+
       if (identity != null) {
          ActiveMQServerLogger.LOGGER.serverStopped("identity=" + identity + ",version=" + getVersion().getFullVersion(), tempNodeID, getUptime());
       } else {
@@ -1494,6 +1522,11 @@ public class ActiveMQServerImpl implements ActiveMQServer {
    @Override
    public boolean isStarted() {
       return state == SERVER_STATE.STARTED;
+   }
+
+   @Override
+   public ElectionManager getElectionManager() {
+      return electionManager;
    }
 
    @Override

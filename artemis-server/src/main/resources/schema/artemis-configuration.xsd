@@ -2484,6 +2484,7 @@
             </xsd:annotation>
          </xsd:element>
       </xsd:choice>
+      <xsd:attribute name="quorum-nodes" type="xsd:string"/>
       <xsd:attributeGroup ref="xml:specialAttrs"/>
    </xsd:complexType>
 
