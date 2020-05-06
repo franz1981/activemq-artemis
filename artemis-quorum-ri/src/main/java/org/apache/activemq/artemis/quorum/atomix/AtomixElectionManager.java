@@ -71,11 +71,16 @@ public final class AtomixElectionManager implements ElectionManager {
    @Override
    public CompletableFuture<?> stop() {
       if (this.atomix != null) {
-         // TODO automatically close it?
-         if (this.liveElection != null) {
-            throw new IllegalStateException("cannot stop this service without leaving the live election first");
-         }
          try {
+            final AtomixElection atomixLiveElection = this.liveElection;
+            if (atomixLiveElection != null) {
+               this.liveElection = null;
+               try {
+                  atomixLiveElection.close();
+               } catch (Throwable t) {
+                  // TODO log me
+               }
+            }
             return this.atomix.stop();
          } finally {
             this.atomix = null;
