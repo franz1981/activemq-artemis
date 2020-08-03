@@ -1174,7 +1174,8 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
 
    // HORNETQ-1029
    private void applyExpiryDelay(Message message, SimpleString address) {
-      long expirationOverride = addressSettingsRepository.getMatch(address.toString()).getExpiryDelay();
+      final AddressSettings addressSettings = addressSettingsRepository.getMatch(address.toString());
+      long expirationOverride = addressSettings.getExpiryDelay();
 
       // A -1 <expiry-delay> means don't do anything
       if (expirationOverride >= 0) {
@@ -1183,9 +1184,8 @@ public class PostOfficeImpl implements PostOffice, NotificationListener, Binding
             message.setExpiration(System.currentTimeMillis() + expirationOverride);
          }
       } else {
-         long minExpiration = addressSettingsRepository.getMatch(address.toString()).getMinExpiryDelay();
-         long maxExpiration = addressSettingsRepository.getMatch(address.toString()).getMaxExpiryDelay();
-
+         long minExpiration = addressSettings.getMinExpiryDelay();
+         long maxExpiration = addressSettings.getMaxExpiryDelay();
          if (maxExpiration != AddressSettings.DEFAULT_MAX_EXPIRY_DELAY && (message.getExpiration() == 0 || message.getExpiration() > (System.currentTimeMillis() + maxExpiration))) {
             message.setExpiration(System.currentTimeMillis() + maxExpiration);
          } else if (minExpiration != AddressSettings.DEFAULT_MIN_EXPIRY_DELAY && message.getExpiration() < (System.currentTimeMillis() + minExpiration)) {

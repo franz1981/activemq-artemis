@@ -184,8 +184,14 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    private final OperationContext context;
 
+   private static class ObjLongPair<T> {
+      T a;
+      long b;
+   }
+
    // Session's usage should be by definition single threaded, hence it's not needed to use a concurrentHashMap here
-   protected final Map<SimpleString, Pair<Object, AtomicLong>> targetAddressInfos = new MaxSizeMap<>(100);
+   // TODO probably an LruCache would be better here?
+   protected final Map<SimpleString, ObjLongPair<Object>> targetAddressInfos = new MaxSizeMap<>(100);
 
    private final long creationTime = System.currentTimeMillis();
 
@@ -1912,9 +1918,9 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
    @Override
    public String getLastSentMessageID(String address) {
-      Pair<Object, AtomicLong> value = targetAddressInfos.get(SimpleString.toSimpleString(address));
+      ObjLongPair<Object> value = targetAddressInfos.get(SimpleString.toSimpleString(address));
       if (value != null) {
-         return value.getA().toString();
+         return value.a.toString();
       } else {
          return null;
       }
@@ -2009,7 +2015,9 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
    }
 
    public Map<SimpleString, Pair<Object, AtomicLong>> cloneTargetAddresses() {
-      return new HashMap<>(targetAddressInfos);
+      HashMap<SimpleString, Pair<Object, AtomicLong>> clone = new HashMap<>(targetAddressInfos.size());
+      targetAddressInfos.forEach((key, value) -> clone.put(key, new Pair<>(value.a, new AtomicLong(value.b))));
+      return clone;
    }
 
    private void setStarted(final boolean s) {
@@ -2116,6 +2124,17 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
       return doSend(tx, msg, originalAddress, direct, noAutoCreateQueue, routingContext);
    }
 
+   private void handleSecurityCheck(AddressInfo art) throws Exception {
+      assert securityEnabled;
+      try {
+         securityCheck(art.getName(), CheckType.SEND, this);
+      } catch (ActiveMQException e) {
+         if (!autoCommitSends && tx != null) {
+            tx.markAsRollbackOnly(e);
+         }
+         throw e;
+      }
+   }
 
    @Override
    public synchronized RoutingStatus doSend(final Transaction tx,
@@ -2142,13 +2161,8 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
       // Consumer
       // check the user has write access to this address.
-      try {
-         securityCheck(art.getName(), CheckType.SEND, this);
-      } catch (ActiveMQException e) {
-         if (!autoCommitSends && tx != null) {
-            tx.markAsRollbackOnly(e);
-         }
-         throw e;
+      if (securityEnabled) {
+         handleSecurityCheck(art);
       }
 
       if (server.getConfiguration().isPopulateValidatedUser() && validatedUser != null) {
@@ -2171,13 +2185,16 @@ public class ServerSessionImpl implements ServerSession, FailureListener {
 
          result = postOffice.route(msg, routingContext, direct);
 
-         Pair<Object, AtomicLong> value = targetAddressInfos.get(msg.getAddressSimpleString());
+         ObjLongPair<Object> value = targetAddressInfos.get(msg.getAddressSimpleString());
 
          if (value == null) {
-            targetAddressInfos.put(msg.getAddressSimpleString(), new Pair<>(msg.getUserID(), new AtomicLong(1)));
+            value = new ObjLongPair<>();
+            value.a = msg.getUserID();
+            value.b = 1;
+            targetAddressInfos.put(msg.getAddressSimpleString(), value);
          } else {
-            value.setA(msg.getUserID());
-            value.getB().incrementAndGet();
+            value.a = msg.getUserID();
+            value.b++;
          }
       } finally {
          if (!routingContext.isReusable()) {
