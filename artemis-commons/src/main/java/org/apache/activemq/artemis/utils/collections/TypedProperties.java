@@ -27,6 +27,7 @@ import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 
 import io.netty.buffer.ByteBuf;
 import org.apache.activemq.artemis.api.core.ActiveMQPropertyConversionException;
@@ -170,9 +171,13 @@ public class TypedProperties {
    }
 
    public Byte getByteProperty(final SimpleString key) throws ActiveMQPropertyConversionException {
+      return getBytePropertyOrDefault(key, () -> Byte.valueOf(null));
+   }
+
+   public Byte getBytePropertyOrDefault(final SimpleString key, final Supplier<Byte> defaultValue) throws ActiveMQPropertyConversionException {
       Object value = doGetProperty(key);
       if (value == null) {
-         return Byte.valueOf(null);
+         return defaultValue.get();
       } else if (value instanceof Byte) {
          return (Byte) value;
       } else if (value instanceof SimpleString) {

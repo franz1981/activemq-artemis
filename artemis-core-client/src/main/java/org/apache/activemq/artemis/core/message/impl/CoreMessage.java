@@ -152,10 +152,11 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
 
    @Override
    public RoutingType getRoutingType() {
-      if (containsProperty(Message.HDR_ROUTING_TYPE)) {
-         return RoutingType.getType(getByteProperty(Message.HDR_ROUTING_TYPE));
+      final Byte b = getProperties().getBytePropertyOrDefault(Message.HDR_ROUTING_TYPE, () -> null);
+      if (b == null) {
+         return null;
       }
-      return null;
+      return RoutingType.getType(b);
    }
 
    @Override
@@ -591,9 +592,18 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
          TypedProperties properties = this.properties;
          if (properties == null) {
             properties = new TypedProperties(INTERNAL_PROPERTY_NAMES_PREDICATE);
+            final ByteBuf buffer = this.buffer;
             if (buffer != null && propertiesLocation >= 0) {
-               final ByteBuf byteBuf = buffer.duplicate().readerIndex(propertiesLocation);
-               properties.decode(byteBuf, coreMessageObjectPools == null ? null : coreMessageObjectPools.getPropertiesDecoderPools());
+               final int readerIndex = buffer.readerIndex();
+               final int writerIndex = buffer.writerIndex();
+               buffer.readerIndex(propertiesLocation);
+               try {
+                  // TODO create a decode method that won't modify anything
+                  properties.decode(buffer, coreMessageObjectPools == null ? null : coreMessageObjectPools.getPropertiesDecoderPools());
+               } finally {
+                  // reset indexes to their original values
+                  buffer.setIndex(readerIndex, writerIndex);
+               }
             }
             this.properties = properties;
          }
