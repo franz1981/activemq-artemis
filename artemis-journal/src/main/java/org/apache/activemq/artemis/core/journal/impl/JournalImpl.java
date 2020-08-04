@@ -27,6 +27,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
@@ -38,10 +39,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Predicate;
 
+import io.netty.util.internal.PlatformDependent;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQBuffers;
 import org.apache.activemq.artemis.api.core.ActiveMQExceptionType;
@@ -192,11 +195,89 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
 
    private Executor compactorExecutor = null;
 
-   private Executor appendExecutor = null;
+   private ExclusiveExecutor appendExecutor = null;
 
    private final ConcurrentHashSet<CountDownLatch> latches = new ConcurrentHashSet<>();
 
    private final ExecutorFactory providedIOThreadPool;
+
+   private static final class ExclusiveExecutor implements AutoCloseable, Executor {
+
+      private final Queue<Runnable> journalTasks;
+      private volatile Thread sleepingThread;
+      private final Thread ioThread;
+      private volatile boolean shutdown;
+      private final CountDownLatch completed;
+
+      ExclusiveExecutor() {
+         completed = new CountDownLatch(1);
+         journalTasks = PlatformDependent.newMpscQueue();
+         ioThread = new Thread(() -> {
+            final Thread t = Thread.currentThread();
+            final Queue<Runnable> journalTasks = this.journalTasks;
+            try {
+               while (!shutdown) {
+                  Runnable task;
+                  while ((task = journalTasks.poll()) != null) {
+                     try {
+                        task.run();
+                     } catch (Throwable throwable) {
+                        ActiveMQJournalLogger.LOGGER.error("Error while executing I/O tasks", throwable);
+                     }
+                  }
+                  // do not try to sleep immediately because is costy for who wake up it
+                  sleepingThread = t;
+                  try {
+                     if (journalTasks.isEmpty()) {
+                        LockSupport.park(sleepingThread);
+                     }
+                  } finally {
+                     sleepingThread = null;
+                  }
+               }
+            } finally {
+               completed.countDown();
+            }
+         });
+      }
+
+      ExclusiveExecutor start() {
+         synchronized (this) {
+            if (shutdown) {
+               throw new IllegalStateException("the executor has been shutdown!");
+            }
+            ioThread.start();
+            return this;
+         }
+      }
+
+      @Override
+      public void execute(Runnable runnable) {
+         if (shutdown) {
+            throw new RejectedExecutionException("the executor has been shutdown!");
+         }
+         journalTasks.add(runnable);
+         final Thread sleepingThread = this.sleepingThread;
+         if (sleepingThread != null) {
+            LockSupport.unpark(sleepingThread);
+         }
+      }
+
+      @Override
+      public void close() throws Exception {
+         synchronized (this) {
+            shutdown = true;
+            final Thread sleepingThread = this.sleepingThread;
+            if (sleepingThread != null) {
+               LockSupport.unpark(sleepingThread);
+            }
+            completed.await();
+            ioThread.join();
+            // TODO drain remaining tasks?
+         }
+      }
+   }
+
    protected ExecutorFactory ioExecutorFactory;
    private ThreadPoolExecutor threadPool;
 
@@ -2538,11 +2619,11 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
          ioExecutorFactory = providedIOThreadPool;
       }
 
+      appendExecutor = new ExclusiveExecutor().start();
+
       filesExecutor = ioExecutorFactory.getExecutor();
 
       compactorExecutor = ioExecutorFactory.getExecutor();
-
-      appendExecutor = ioExecutorFactory.getExecutor();
 
       filesRepository.setExecutor(filesExecutor);
 
@@ -2571,6 +2652,7 @@ public class JournalImpl extends JournalBase implements TestableJournal, Journal
          ioExecutorFactory = null;
       }
 
+      appendExecutor.close();
 
       journalLock.writeLock().lock();
       try {

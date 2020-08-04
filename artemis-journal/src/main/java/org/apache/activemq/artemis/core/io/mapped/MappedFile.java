@@ -48,7 +48,8 @@ final class MappedFile implements AutoCloseable {
       this.position = position;
       this.length = length;
       this.byteBufWrapper = Unpooled.wrappedBuffer(buffer);
-      this.channelBufferWrapper = new ChannelBufferWrapper(this.byteBufWrapper, false);
+      // we control channelBufferWrapper life-cycle
+      this.channelBufferWrapper = new ChannelBufferWrapper(this.byteBufWrapper, true);
       this.address = PlatformDependent.directBufferAddress(buffer);
    }
 
