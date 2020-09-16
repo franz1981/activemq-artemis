@@ -1219,16 +1219,10 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          securitySettingPlugin.stop();
       }
 
-      if (threadPool != null && !threadPoolSupplied) {
-         shutdownPool(threadPool);
-      }
-
       if (ioExecutorPool != null) {
          shutdownPool(ioExecutorPool);
       }
 
-      if (!threadPoolSupplied)
-         threadPool = null;
       if (!scheduledPoolSupplied)
          scheduledPool = null;
 
@@ -1265,6 +1259,16 @@ public class ActiveMQServerImpl implements ActiveMQServer {
          } catch (Throwable t) {
             ActiveMQServerLogger.LOGGER.errorStoppingComponent(t, activation.getClass().getName());
          }
+      }
+
+      // JDBC journal can use this thread pool to configure the network timeout on a pooled connection:
+      // better to stop it after closing activation (and JDBC node manager on it)
+      final ExecutorService threadPool = this.threadPool;
+      if (threadPool != null && !threadPoolSupplied) {
+         shutdownPool(threadPool);
+      }
+      if (!threadPoolSupplied) {
+         this.threadPool = null;
       }
 
       if (activationThread != null) {
