@@ -755,6 +755,14 @@
             <version>${commons.dbcp2.version}</version>
             <!-- license Apache 2 -->
          </dependency>
+         <!-- used by commons-dbcp2 -->
+         <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+            <version>${commons.dbcp2.version}</version>
+            <!-- license Apache 2 -->
+            <scope>runtime</scope>
+         </dependency>
 
          <!-- Needed for Micrometer -->
          <dependency>
