@@ -489,6 +489,24 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       return this;
    }
 
+   private void configureJdbcNetworkTimeout() {
+      if (configuration.isPersistenceEnabled()) {
+         if (configuration.getStoreConfiguration() != null && configuration.getStoreConfiguration().getStoreType() == StoreConfiguration.StoreType.DATABASE) {
+            DatabaseStorageConfiguration databaseStorageConfiguration = (DatabaseStorageConfiguration) configuration.getStoreConfiguration();
+            databaseStorageConfiguration.setConnectionProviderNetworkTimeout(threadPool, databaseStorageConfiguration.getJdbcNetworkTimeout());
+         }
+      }
+   }
+
+   private void clearJdbcNetworkTimeout() {
+      if (configuration.isPersistenceEnabled()) {
+         if (configuration.getStoreConfiguration() != null && configuration.getStoreConfiguration().getStoreType() == StoreConfiguration.StoreType.DATABASE) {
+            DatabaseStorageConfiguration databaseStorageConfiguration = (DatabaseStorageConfiguration) configuration.getStoreConfiguration();
+            databaseStorageConfiguration.clearConnectionProviderNetworkTimeout();
+         }
+      }
+   }
+
    /*
     * Can be overridden for tests
     */
@@ -579,6 +597,9 @@ public class ActiveMQServerImpl implements ActiveMQServer {
 
       try {
          checkJournalDirectory();
+
+         // this would create the connection provider while setting the JDBC global network timeout
+         configureJdbcNetworkTimeout();
 
          nodeManager = createNodeManager(configuration.getNodeManagerLockLocation(), false);
 
@@ -1270,6 +1291,9 @@ public class ActiveMQServerImpl implements ActiveMQServer {
       if (!threadPoolSupplied) {
          this.threadPool = null;
       }
+
+      // given that threadPool can be garbage collected, need to clear anything that would make it leaks
+      clearJdbcNetworkTimeout();
 
       if (activationThread != null) {
          try {
