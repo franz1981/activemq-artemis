@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.concurrent.CopyOnWriteArraySet;
 
 import org.apache.activemq.artemis.api.core.ActiveMQIllegalStateException;
 import org.apache.activemq.artemis.api.core.SimpleString;
@@ -41,10 +42,12 @@ public abstract class NodeManager implements ActiveMQComponent {
    private boolean isStarted = false;
 
    protected FileChannel channel;
+   private final CopyOnWriteArraySet<LockListener> lockListeners;
 
    public NodeManager(final boolean replicatedBackup, final File directory) {
       this.directory = directory;
       this.replicatedBackup = replicatedBackup;
+      this.lockListeners = new CopyOnWriteArraySet<>();
    }
 
    // --------------------------------------------------------------------
@@ -228,4 +231,31 @@ public abstract class NodeManager implements ActiveMQComponent {
       }
    }
 
+   protected synchronized void notifyLostLock() {
+      if (!isStarted) {
+         return;
+      }
+      lockListeners.forEach(lockListener -> {
+         try {
+            lockListener.lostLock();
+         } catch (Exception e) {
+
+            // Need to notify everyone so ignore any exception
+         }
+      });
+   }
+
+   public void registerLockListener(LockListener lockListener) {
+      lockListeners.add(lockListener);
+   }
+
+   public void unregisterLockListener(LockListener lockListener) {
+      lockListeners.remove(lockListener);
+   }
+
+   @FunctionalInterface
+   public interface LockListener {
+
+      void lostLock() throws Exception;
+   }
 }

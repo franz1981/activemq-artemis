@@ -23,7 +23,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 
 import org.apache.activemq.artemis.core.server.ActivateCallback;
 import org.apache.activemq.artemis.core.server.impl.FileLockNodeManager;
-import org.apache.activemq.artemis.core.server.impl.FileLockNodeManager.LockListener;
+import org.apache.activemq.artemis.core.server.NodeManager.LockListener;
 import org.apache.activemq.artemis.utils.Wait;
 import org.jboss.byteman.contrib.bmunit.BMRule;
 import org.jboss.byteman.contrib.bmunit.BMRules;
@@ -95,14 +95,9 @@ public class FileLockMonitorTest {
    public LockListener startServer() throws Exception {
       executor = new ScheduledThreadPoolExecutor(2);
       nodeManager = new FileLockNodeManager(sharedDir, false, executor);
-      LockListener listener = nodeManager.new LockListener() {
-
-         @Override
-         protected void lostLock() throws Exception {
-            lostLock = true;
-            nodeManager.crashLiveServer();
-         }
-
+      LockListener listener = () -> {
+         lostLock = true;
+         nodeManager.crashLiveServer();
       };
       nodeManager.registerLockListener(listener);
 

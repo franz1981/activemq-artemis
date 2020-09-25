@@ -22,9 +22,6 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -431,48 +428,7 @@ public class FileLockNodeManager extends NodeManager {
       }
    }
 
-   private void notifyLostLock() {
-      // Additional check we are not initializing or have no locking object anymore
-      // because of a shutdown
-      if (lockListeners != null && liveLock != null) {
-         Set<LockListener> lockListenersSnapshot = null;
-
-         // Snapshot of the set because I'm not sure if we can trigger concurrent
-         // modification exception here if we don't
-         synchronized (lockListeners) {
-            lockListenersSnapshot = new HashSet<>(lockListeners);
-         }
-
-         lockListenersSnapshot.forEach(lockListener -> {
-            try {
-               lockListener.lostLock();
-            } catch (Exception e) {
-               // Need to notify everyone so ignore any exception
-            }
-         });
-      }
-   }
-
-   public void registerLockListener(LockListener lockListener) {
-      lockListeners.add(lockListener);
-   }
-
-   public void unregisterLockListener(LockListener lockListener) {
-      lockListeners.remove(lockListener);
-   }
-
-   protected final Set<LockListener> lockListeners = Collections.synchronizedSet(new HashSet<LockListener>());
-
    private MonitorLock monitorLock;
-
-   public abstract class LockListener {
-      protected abstract void lostLock() throws Exception;
-
-      protected void unregisterListener() {
-         lockListeners.remove(this);
-      }
-   }
-
 
    public class MonitorLock extends ActiveMQScheduledComponent {
       public MonitorLock(ScheduledExecutorService scheduledExecutorService,

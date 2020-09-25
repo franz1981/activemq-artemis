@@ -20,7 +20,6 @@ import org.apache.activemq.artemis.core.server.ActivateCallback;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.NodeManager;
 import org.apache.activemq.artemis.core.server.cluster.ha.SharedStoreMasterPolicy;
-import org.apache.activemq.artemis.core.server.impl.FileLockNodeManager.LockListener;
 import org.jboss.logging.Logger;
 
 public final class SharedStoreLiveActivation extends LiveActivation {
@@ -32,7 +31,7 @@ public final class SharedStoreLiveActivation extends LiveActivation {
 
    private ActiveMQServerImpl activeMQServer;
 
-   private volatile FileLockNodeManager.LockListener activeLockListener;
+   private volatile NodeManager.LockListener activeLockListener;
 
    private volatile ActivateCallback nodeManagerActivateCallback;
 
@@ -92,19 +91,8 @@ public final class SharedStoreLiveActivation extends LiveActivation {
    }
 
    private void addLockListener(ActiveMQServerImpl activeMQServer, NodeManager nodeManager) {
-      if (nodeManager instanceof FileLockNodeManager) {
-         FileLockNodeManager fileNodeManager = (FileLockNodeManager) nodeManager;
-
-         activeLockListener = fileNodeManager.new LockListener() {
-
-            @Override
-            public void lostLock() {
-               stopStartServerInSeperateThread(activeMQServer);
-            }
-
-         };
-         fileNodeManager.registerLockListener(activeLockListener);
-      } // else no business registering a listener
+      activeLockListener = () -> stopStartServerInSeperateThread(activeMQServer);
+      nodeManager.registerLockListener(activeLockListener);
    }
 
    /**
@@ -147,9 +135,9 @@ public final class SharedStoreLiveActivation extends LiveActivation {
       NodeManager nodeManagerInUse = activeMQServer.getNodeManager();
 
       if (nodeManagerInUse != null) {
-         LockListener closeLockListener = activeLockListener;
+         NodeManager.LockListener closeLockListener = activeLockListener;
          if (closeLockListener != null) {
-            closeLockListener.unregisterListener();
+            nodeManagerInUse.unregisterLockListener(activeLockListener);
          }
          ActivateCallback activateCallback = nodeManagerActivateCallback;
          if (activateCallback != null) {
@@ -160,7 +148,6 @@ public final class SharedStoreLiveActivation extends LiveActivation {
          } else {
             nodeManagerInUse.pauseLiveServer();
          }
-
       }
    }
 }
