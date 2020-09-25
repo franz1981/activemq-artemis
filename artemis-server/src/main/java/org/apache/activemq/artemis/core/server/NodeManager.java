@@ -27,9 +27,11 @@ import org.apache.activemq.artemis.api.core.ActiveMQIllegalStateException;
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.utils.UUID;
 import org.apache.activemq.artemis.utils.UUIDGenerator;
+import org.jboss.logging.Logger;
 
 public abstract class NodeManager implements ActiveMQComponent {
 
+   private static final Logger LOGGER = Logger.getLogger(NodeManager.class);
    protected static final byte FIRST_TIME_START = '0';
    public static final String SERVER_LOCK_NAME = "server.lock";
    private static final String ACCESS_MODE = "rw";
@@ -42,6 +44,7 @@ public abstract class NodeManager implements ActiveMQComponent {
    private boolean isStarted = false;
 
    protected FileChannel channel;
+   // copy-on-write allows concurrent modifications in the LockListener::lockLost() method
    private final CopyOnWriteArraySet<LockListener> lockListeners;
 
    public NodeManager(final boolean replicatedBackup, final File directory) {
@@ -232,14 +235,15 @@ public abstract class NodeManager implements ActiveMQComponent {
    }
 
    protected synchronized void notifyLostLock() {
+      // synchronized prevent a stopped node manager to notify any listener
       if (!isStarted) {
          return;
       }
       lockListeners.forEach(lockListener -> {
          try {
             lockListener.lostLock();
-         } catch (Exception e) {
-
+         } catch (Throwable e) {
+            LOGGER.warn( e);
             // Need to notify everyone so ignore any exception
          }
       });

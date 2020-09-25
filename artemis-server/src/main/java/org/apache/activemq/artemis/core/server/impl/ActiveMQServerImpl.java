@@ -521,7 +521,7 @@ public class ActiveMQServerImpl implements ActiveMQServer {
                throw new IllegalArgumentException("replicatingBackup is not supported yet while using JDBC persistence");
             }
             final DatabaseStorageConfiguration dbConf = (DatabaseStorageConfiguration) configuration.getStoreConfiguration();
-            manager = JdbcNodeManager.with(dbConf, scheduledPool, executorFactory, shutdownOnCriticalIO);
+            manager = JdbcNodeManager.with(dbConf, scheduledPool, executorFactory);
          } else if (haType == null || haType == HAPolicyConfiguration.TYPE.LIVE_ONLY) {
             if (logger.isDebugEnabled()) {
                logger.debug("Detected no Shared Store HA options on JDBC store");

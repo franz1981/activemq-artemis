@@ -20,13 +20,13 @@ package org.apache.activemq.artemis.core.server.impl.jdbc;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.server.ActiveMQScheduledComponent;
+import org.apache.activemq.artemis.core.server.NodeManager;
 import org.apache.activemq.artemis.utils.actors.ArtemisExecutor;
 import org.jboss.logging.Logger;
 
 /**
- * Default implementation of a {@link ScheduledLeaseLock}: see {@link ScheduledLeaseLock#of(ScheduledExecutorService, ArtemisExecutor, String, LeaseLock, long, IOCriticalErrorListener)}.
+ * Default implementation of a {@link ScheduledLeaseLock}.
  */
 final class ActiveMQScheduledLeaseLock extends ActiveMQScheduledComponent implements ScheduledLeaseLock {
 
@@ -36,14 +36,14 @@ final class ActiveMQScheduledLeaseLock extends ActiveMQScheduledComponent implem
    private final LeaseLock lock;
    private long lastLockRenewStart;
    private final long renewPeriodMillis;
-   private final IOCriticalErrorListener ioCriticalErrorListener;
+   private final NodeManager.LockListener lockListener;
 
    ActiveMQScheduledLeaseLock(ScheduledExecutorService scheduledExecutorService,
                               ArtemisExecutor executor,
                               String lockName,
                               LeaseLock lock,
                               long renewPeriodMillis,
-                              IOCriticalErrorListener ioCriticalErrorListener) {
+                              NodeManager.LockListener lockListener) {
       super(scheduledExecutorService, executor, 0, renewPeriodMillis, TimeUnit.MILLISECONDS, false);
       if (renewPeriodMillis >= lock.expirationMillis()) {
          throw new IllegalArgumentException("renewPeriodMillis must be < lock's expirationMillis");
@@ -53,7 +53,7 @@ final class ActiveMQScheduledLeaseLock extends ActiveMQScheduledComponent implem
       this.renewPeriodMillis = renewPeriodMillis;
       //already expired start time
       this.lastLockRenewStart = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(lock.expirationMillis());
-      this.ioCriticalErrorListener = ioCriticalErrorListener;
+      this.lockListener = lockListener;
    }
 
    @Override
@@ -87,13 +87,21 @@ final class ActiveMQScheduledLeaseLock extends ActiveMQScheduledComponent implem
    public void run() {
       final long lastRenewStart = this.lastLockRenewStart;
       final long renewStart = System.nanoTime();
+      boolean renewed = false;
       try {
-         if (!this.lock.renew()) {
-            ioCriticalErrorListener.onIOException(new IllegalStateException(lockName + " lock can't be renewed"), "Critical error while on " + lockName + " renew", null);
-         }
+         renewed = this.lock.renew();
       } catch (Throwable t) {
-         ioCriticalErrorListener.onIOException(t, "Critical error while on " + lockName + " renew", null);
-         throw t;
+         LOGGER.warnf(t, "on %s lock renew: assume failure", lockName);
+      }
+      if (!renewed) {
+         try {
+            lockListener.lostLock();
+         } catch (Throwable t) {
+            LOGGER.warnf(t, "on %s lock list", lockName);
+         } finally {
+            stop();
+         }
+         return;
       }
       //logic to detect slowness of DB and/or the scheduled executor service
       detectAndReportRenewSlowness(lockName, lastRenewStart, renewStart, renewPeriodMillis, lock.expirationMillis());

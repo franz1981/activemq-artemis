@@ -23,7 +23,6 @@ import java.util.function.Supplier;
 
 import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.config.storage.DatabaseStorageConfiguration;
-import org.apache.activemq.artemis.core.io.IOCriticalErrorListener;
 import org.apache.activemq.artemis.core.server.ActivateCallback;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.NodeManager;
@@ -53,12 +52,9 @@ public final class JdbcNodeManager extends NodeManager {
    private final long lockAcquisitionTimeoutMillis;
    private volatile boolean interrupted = false;
    private final LeaseLock.Pauser pauser;
-   private final IOCriticalErrorListener ioCriticalErrorListener;
-
    public static JdbcNodeManager with(DatabaseStorageConfiguration configuration,
                                       ScheduledExecutorService scheduledExecutorService,
-                                      ExecutorFactory executorFactory,
-                                      IOCriticalErrorListener ioCriticalErrorListener) {
+                                      ExecutorFactory executorFactory) {
       validateTimeoutConfiguration(configuration);
       final SQLProvider.Factory sqlProviderFactory;
       if (configuration.getSqlProviderFactory() != null) {
@@ -74,8 +70,7 @@ public final class JdbcNodeManager extends NodeManager {
                              configuration.getConnectionProvider(),
                              sqlProviderFactory.create(configuration.getNodeManagerStoreTableName(), SQLProvider.DatabaseStoreType.NODE_MANAGER),
                              scheduledExecutorService,
-                             executorFactory,
-                             ioCriticalErrorListener);
+                             executorFactory);
    }
 
    private static JdbcNodeManager usingConnectionProvider(String brokerId,
@@ -85,8 +80,7 @@ public final class JdbcNodeManager extends NodeManager {
                                                   JDBCConnectionProvider connectionProvider,
                                                   SQLProvider provider,
                                                   ScheduledExecutorService scheduledExecutorService,
-                                                  ExecutorFactory executorFactory,
-                                                  IOCriticalErrorListener ioCriticalErrorListener) {
+                                                  ExecutorFactory executorFactory) {
       return new JdbcNodeManager(
          () -> JdbcSharedStateManager.usingConnectionProvider(brokerId,
                                                       lockExpirationMillis,
@@ -95,8 +89,7 @@ public final class JdbcNodeManager extends NodeManager {
          lockRenewPeriodMillis,
          lockAcquisitionTimeoutMillis,
          scheduledExecutorService,
-         executorFactory,
-         ioCriticalErrorListener);
+         executorFactory);
    }
 
    private static void validateTimeoutConfiguration(DatabaseStorageConfiguration configuration) {
@@ -125,8 +118,7 @@ public final class JdbcNodeManager extends NodeManager {
                            long lockRenewPeriodMillis,
                            long lockAcquisitionTimeoutMillis,
                            ScheduledExecutorService scheduledExecutorService,
-                           ExecutorFactory executorFactory,
-                           IOCriticalErrorListener ioCriticalErrorListener) {
+                           ExecutorFactory executorFactory) {
       super(false, null);
       this.lockAcquisitionTimeoutMillis = lockAcquisitionTimeoutMillis;
       this.pauser = LeaseLock.Pauser.sleep(Math.min(lockRenewPeriodMillis, MAX_PAUSE_MILLIS), TimeUnit.MILLISECONDS);
@@ -137,7 +129,7 @@ public final class JdbcNodeManager extends NodeManager {
          "live",
          this.sharedStateManager.liveLock(),
          lockRenewPeriodMillis,
-         ioCriticalErrorListener);
+         this::notifyLostLock);
       this.scheduledBackupLockFactory = () -> ScheduledLeaseLock.of(
          scheduledExecutorService,
          executorFactory != null ?
@@ -145,8 +137,7 @@ public final class JdbcNodeManager extends NodeManager {
          "backup",
          this.sharedStateManager.backupLock(),
          lockRenewPeriodMillis,
-         ioCriticalErrorListener);
-      this.ioCriticalErrorListener = ioCriticalErrorListener;
+         this::notifyLostLock);
       this.sharedStateManager = null;
       this.scheduledLiveLock = null;
       this.scheduledBackupLock = null;
@@ -171,9 +162,7 @@ public final class JdbcNodeManager extends NodeManager {
          this.sharedStateManager = null;
          this.scheduledLiveLock = null;
          this.scheduledBackupLock = null;
-         if (this.ioCriticalErrorListener != null) {
-            this.ioCriticalErrorListener.onIOException(e, "Failed to setup the JdbcNodeManager", null);
-         }
+         LOGGER.error("failed to start node manager", e);
          throw e;
       }
    }
@@ -287,12 +276,13 @@ public final class JdbcNodeManager extends NodeManager {
    }
 
    private void renewLiveLockIfNeeded(final long acquiredOn) {
+      assert !this.scheduledLiveLock.isStarted();
       final long acquiredMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - acquiredOn);
       if (acquiredMillis > this.scheduledLiveLock.renewPeriodMillis()) {
          if (!this.scheduledLiveLock.lock().renew()) {
-            final IllegalStateException e = new IllegalStateException("live lock can't be renewed");
-            ioCriticalErrorListener.onIOException(e, "live lock can't be renewed", null);
-            throw e;
+            notifyLostLock();
+            LOGGER.error("live lock cannot be renewed");
+            throw new IllegalStateException("live lock isn't renewed");
          }
       }
    }
@@ -301,6 +291,7 @@ public final class JdbcNodeManager extends NodeManager {
     * Lock live node and check for a live state, taking care to renew it (if needed) or releasing it otherwise
     */
    private boolean lockLiveAndCheckLiveState() throws Exception {
+      assert !this.scheduledLiveLock.isStarted();
       lock(this.scheduledLiveLock.lock());
       final long acquiredOn = System.nanoTime();
       boolean liveWhileLocked = false;
@@ -407,10 +398,13 @@ public final class JdbcNodeManager extends NodeManager {
       LOGGER.debug("ENTER pauseLiveServer");
       try {
          if (scheduledLiveLock.isStarted()) {
-            LOGGER.debug("scheduledLiveLock is running: set paused shared state, stop it and release live lock");
-            setPaused();
-            scheduledLiveLock.stop();
-            scheduledLiveLock.lock().release();
+            try {
+               LOGGER.debug("scheduledLiveLock is running: set paused shared state, stop it and release live lock");
+               setPaused();
+            } finally {
+               scheduledLiveLock.stop();
+               scheduledLiveLock.lock().release();
+            }
          } else {
             LOGGER.debug("scheduledLiveLock is not running: try renew live lock");
             if (scheduledLiveLock.lock().renew()) {
@@ -418,9 +412,7 @@ public final class JdbcNodeManager extends NodeManager {
                setPaused();
                scheduledLiveLock.lock().release();
             } else {
-               final IllegalStateException e = new IllegalStateException("live lock can't be renewed");
-               ioCriticalErrorListener.onIOException(e, "live lock can't be renewed on pauseLiveServer", null);
-               throw e;
+               notifyLostLock();
             }
          }
       } finally {
