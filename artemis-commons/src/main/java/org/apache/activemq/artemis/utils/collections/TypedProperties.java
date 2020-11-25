@@ -16,7 +16,11 @@
  */
 package org.apache.activemq.artemis.utils.collections;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -25,7 +29,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.function.BiConsumer;
-import java.util.function.Consumer;
 import java.util.function.Predicate;
 
 import io.netty.buffer.ByteBuf;
@@ -35,6 +38,8 @@ import org.apache.activemq.artemis.logs.ActiveMQUtilBundle;
 import org.apache.activemq.artemis.utils.AbstractByteBufPool;
 import org.apache.activemq.artemis.utils.ByteUtil;
 import org.apache.activemq.artemis.utils.DataConstants;
+import org.apache.activemq.artemis.utils.Env;
+import org.apache.activemq.artemis.utils.PowerOf2Util;
 
 import static org.apache.activemq.artemis.utils.DataConstants.BOOLEAN;
 import static org.apache.activemq.artemis.utils.DataConstants.BYTE;
@@ -57,7 +62,77 @@ import static org.apache.activemq.artemis.utils.DataConstants.STRING;
  */
 public class TypedProperties {
 
-   private Map<SimpleString, PropertyValue> properties;
+   private static final float DEFAULT_LOAD_FACTOR = 1f;
+   /**
+    * This is copied from {@link HashMap}:<br>
+    * (The javadoc description is true upon serialization.
+    * Additionally, if the table array has not been allocated, this
+    * field holds the initial array capacity, or zero signifying
+    * DEFAULT_INITIAL_CAPACITY.)
+    */
+   private static final MethodHandle GET_THRESHOLD;
+   private static boolean ERRORED;
+
+   static {
+      MethodHandle mh = null;
+      try {
+         final Field tableField = HashMap.class.getDeclaredField("threshold");
+         tableField.setAccessible(true);
+         mh = MethodHandles.lookup().unreflectGetter(tableField);
+      } catch (Throwable t) {
+         // silent fail: it's fine
+      }
+      GET_THRESHOLD = mh;
+   }
+
+   private static int tableCapacity(HashMap<?, ?> map) {
+      if (GET_THRESHOLD == null) {
+         return map.size();
+      }
+      if (ERRORED) {
+         return map.size();
+      }
+      try {
+         // lucky us the load factor is 1 ;)
+         return (int) GET_THRESHOLD.invokeExact(map);
+      } catch (Throwable t) {
+         ERRORED = true;
+         return map.size();
+      }
+   }
+
+   private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 32 : 40;
+   private static final int HASH_MAP_BYTES = Env.use32BitOops() == Boolean.TRUE ? 48 : 72;
+   private static final int HASH_ENTRY_SET_BYTES = 16;
+   private static final int HASH_MAP_NODE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 32 : 48;
+   private static final int OBJ_ARRAY_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
+   private static final int OBJ_REF_BYTES = Env.use32BitOops() == Boolean.TRUE ? Integer.BYTES : Long.BYTES;
+
+   private static final class ControlledHashMap<K, V> extends HashMap<K, V> {
+
+      ControlledHashMap(int initialCapacity) {
+         super(initialCapacity, DEFAULT_LOAD_FACTOR);
+      }
+
+      ControlledHashMap(ControlledHashMap<? extends K, ? extends V> m) {
+         this(m.size());
+         putAll(m);
+      }
+
+      @Override
+      @Deprecated
+      public Set<K> keySet() {
+         throw new UnsupportedOperationException("forbidden for footprint reasons");
+      }
+
+      @Override
+      @Deprecated
+      public Collection<V> values() {
+         throw new UnsupportedOperationException("forbidden for footprint reasons");
+      }
+   }
+
+   private ControlledHashMap<SimpleString, PropertyValue> properties;
 
    private int size;
 
@@ -79,17 +154,34 @@ public class TypedProperties {
       return properties == null ? 0 : properties.size();
    }
 
+   /**
+    * This is an eager (but deep ie it includes members) estimation of the on heap memory footprint of this instance.
+    * It won't account for cached nested values/keys due to internal or external pooling mechanisms.
+    */
    public synchronized int getMemoryOffset() {
-      // The estimate is basically the encode size + 2 object references for each entry in the map
-      // Note we don't include the attributes or anything else since they already included in the memory estimate
-      // of the ServerMessage
-
-      return properties == null ? 0 : size + 2 * DataConstants.SIZE_INT * properties.size();
+      int size = BASE_BYTES;
+      final ControlledHashMap<SimpleString, PropertyValue> properties = this.properties;
+      if (properties == null) {
+         return size;
+      }
+      // we always assume entry set is been set
+      size += HASH_MAP_BYTES + HASH_ENTRY_SET_BYTES;
+      final int tableCapacity = tableCapacity(properties);
+      final int tableArrayBytes = PowerOf2Util.align(OBJ_ARRAY_BYTES + tableCapacity * OBJ_REF_BYTES, Long.BYTES);
+      size += tableArrayBytes;
+      // map content
+      for (Entry<SimpleString, PropertyValue> entry : properties.entrySet()) {
+         final int keyBytes = SimpleString.memoryFootprint(entry.getKey());
+         final int valueBytes = entry.getValue().memoryFootprint();
+         final int bytes = HASH_MAP_NODE_BYTES + keyBytes + valueBytes;
+         size += bytes;
+      }
+      return size;
    }
 
    public TypedProperties(final TypedProperties other) {
       synchronized (other) {
-         properties = other.properties == null ? null : new HashMap<>(other.properties);
+         properties = other.properties == null ? null : new ControlledHashMap<>(other.properties);
          size = other.size;
          internalPropertyPredicate = other.internalPropertyPredicate;
          internalProperties = other.internalProperties;
@@ -319,11 +411,14 @@ public class TypedProperties {
          return properties.containsKey(key);
       }
    }
+
    public synchronized Set<SimpleString> getPropertyNames() {
       if (properties == null) {
          return Collections.emptySet();
       } else {
-         return new HashSet<>(properties.keySet());
+         final HashSet<SimpleString> propertyNames = new HashSet<>(properties.size());
+         properties.forEach((key, value) -> propertyNames.add(key));
+         return propertyNames;
       }
    }
 
@@ -356,13 +451,10 @@ public class TypedProperties {
       }
       internalProperties = false;
       size -= removedBytes;
-      return removed;
-   }
-
-   public synchronized void forEachKey(Consumer<SimpleString> action) {
-      if (properties != null) {
-         properties.keySet().forEach(action::accept);
+      if (properties.isEmpty()) {
+         properties = null;
       }
+      return removed;
    }
 
    public synchronized void forEach(BiConsumer<SimpleString, Object> action) {
@@ -373,7 +465,7 @@ public class TypedProperties {
 
    private synchronized void forEachInternal(BiConsumer<SimpleString, PropertyValue> action) {
       if (properties != null) {
-         properties.forEach(action::accept);
+         properties.forEach(action);
       }
    }
 
@@ -460,7 +552,7 @@ public class TypedProperties {
          int numHeaders = buffer.readInt();
 
          //optimize the case of no collisions to avoid any resize (it doubles the map size!!!) when load factor is reached
-         properties = new HashMap<>(numHeaders, 1.0f);
+         properties = new ControlledHashMap<>(numHeaders);
          size = 0;
 
          for (int i = 0; i < numHeaders; i++) {
@@ -568,6 +660,7 @@ public class TypedProperties {
    public synchronized void clear() {
       if (properties != null) {
          properties.clear();
+         properties = null;
       }
       size = 0;
    }
@@ -630,7 +723,7 @@ public class TypedProperties {
       }
 
       if (properties == null) {
-         properties = new HashMap<>();
+         properties = new ControlledHashMap<>(1);
       }
 
       PropertyValue oldValue = properties.put(key, value);
@@ -678,6 +771,8 @@ public class TypedProperties {
 
       abstract int encodeSize();
 
+      abstract int memoryFootprint();
+
       @Override
       public String toString() {
          return "" + getValue();
@@ -686,6 +781,7 @@ public class TypedProperties {
 
    private static final class NullValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       private static final NullValue INSTANCE = new NullValue();
 
       private NullValue() {
@@ -702,6 +798,11 @@ public class TypedProperties {
       }
 
       @Override
+      int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE;
       }
@@ -710,15 +811,15 @@ public class TypedProperties {
 
    private static final class BooleanValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
+      private static final int BOOLEAN_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       private static final int ENCODE_SIZE = DataConstants.SIZE_BYTE + DataConstants.SIZE_BOOLEAN;
       private static final BooleanValue TRUE = new BooleanValue(true);
       private static final BooleanValue FALSE = new BooleanValue(false);
 
-      private final boolean val;
       private final Boolean objVal;
 
       private BooleanValue(final boolean val) {
-         this.val = val;
          this.objVal = val;
       }
 
@@ -738,7 +839,12 @@ public class TypedProperties {
       @Override
       public void write(final ByteBuf buffer) {
          buffer.writeByte(DataConstants.BOOLEAN);
-         buffer.writeBoolean(val);
+         buffer.writeBoolean(objVal);
+      }
+
+      @Override
+      public int memoryFootprint() {
+         return BASE_BYTES + BOOLEAN_BYTES;
       }
 
       @Override
@@ -750,6 +856,8 @@ public class TypedProperties {
 
    private static final class ByteValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
+      private static final int BYTE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       private static final int ENCODE_SIZE = DataConstants.SIZE_BYTE + DataConstants.SIZE_BYTE;
 
       //LAZY CACHE that uses a benign race condition to avoid too many allocations of ByteValue if contended and to allocate upfront unneeded instances.
@@ -767,11 +875,9 @@ public class TypedProperties {
          }
       }
 
-      private final byte val;
       private final Byte objectVal;
 
       private ByteValue(final byte val) {
-         this.val = val;
          this.objectVal = val;
       }
 
@@ -783,7 +889,12 @@ public class TypedProperties {
       @Override
       public void write(final ByteBuf buffer) {
          buffer.writeByte(DataConstants.BYTE);
-         buffer.writeByte(val);
+         buffer.writeByte(objectVal);
+      }
+
+      @Override
+      public int memoryFootprint() {
+         return BASE_BYTES + BYTE_BYTES;
       }
 
       @Override
@@ -793,6 +904,8 @@ public class TypedProperties {
    }
 
    private static final class BytesValue extends PropertyValue {
+
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
 
       final byte[] val;
 
@@ -819,6 +932,11 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES + SimpleString.memoryFootprint(val);
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_INT + val.length;
       }
@@ -826,6 +944,8 @@ public class TypedProperties {
    }
 
    private static final class ShortValue extends PropertyValue {
+
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
 
       final short val;
 
@@ -849,6 +969,11 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_SHORT;
       }
@@ -856,6 +981,7 @@ public class TypedProperties {
 
    private static final class IntValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       final int val;
 
       private IntValue(final int val) {
@@ -878,6 +1004,11 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_INT;
       }
@@ -885,6 +1016,7 @@ public class TypedProperties {
 
    private static final class LongValue extends PropertyValue {
 
+      private static final int BASE_BYTES = 24;
       final long val;
 
       private LongValue(final long val) {
@@ -907,6 +1039,11 @@ public class TypedProperties {
       }
 
       @Override
+      int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_LONG;
       }
@@ -914,6 +1051,7 @@ public class TypedProperties {
 
    private static final class FloatValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       final float val;
 
       private FloatValue(final float val) {
@@ -936,6 +1074,11 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_FLOAT;
       }
@@ -944,6 +1087,7 @@ public class TypedProperties {
 
    private static final class DoubleValue extends PropertyValue {
 
+      private static final int BASE_BYTES = 24;
       final double val;
 
       private DoubleValue(final double val) {
@@ -966,6 +1110,11 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_DOUBLE;
       }
@@ -973,6 +1122,7 @@ public class TypedProperties {
 
    private static final class CharValue extends PropertyValue {
 
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
       final char val;
 
       private CharValue(final char val) {
@@ -995,12 +1145,19 @@ public class TypedProperties {
       }
 
       @Override
+      public int memoryFootprint() {
+         return BASE_BYTES;
+      }
+
+      @Override
       public int encodeSize() {
          return DataConstants.SIZE_BYTE + DataConstants.SIZE_CHAR;
       }
    }
 
    public static final class StringValue extends PropertyValue {
+
+      private static final int BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
 
       final SimpleString val;
 
@@ -1025,6 +1182,11 @@ public class TypedProperties {
       public void write(final ByteBuf buffer) {
          buffer.writeByte(DataConstants.STRING);
          SimpleString.writeSimpleString(buffer, val);
+      }
+
+      @Override
+      public int memoryFootprint() {
+         return BASE_BYTES + SimpleString.memoryFootprint(val);
       }
 
       @Override
@@ -1132,13 +1294,10 @@ public class TypedProperties {
    public synchronized Set<String> getMapNames() {
       if (properties == null) {
          return Collections.emptySet();
-      } else {
-         Set<String> names = new HashSet<>(properties.size());
-         for (SimpleString name : properties.keySet()) {
-            names.add(name.toString());
-         }
-         return names;
       }
+      final Set<String> names = new HashSet<>(properties.size());
+      properties.forEach((key, value) -> names.add(names.toString()));
+      return names;
    }
 
    public synchronized Map<String, Object> getMap() {
@@ -1146,14 +1305,14 @@ public class TypedProperties {
          return Collections.emptyMap();
       } else {
          Map<String, Object> m = new HashMap<>(properties.size());
-         for (Entry<SimpleString, PropertyValue> entry : properties.entrySet()) {
-            Object val = entry.getValue().getValue();
+         properties.forEach((key, value) -> {
+            Object val = value.getValue();
             if (val instanceof SimpleString) {
-               m.put(entry.getKey().toString(), ((SimpleString) val).toString());
+               m.put(key.toString(), ((SimpleString) val).toString());
             } else {
-               m.put(entry.getKey().toString(), val);
+               m.put(key.toString(), val);
             }
-         }
+         });
          return m;
       }
    }

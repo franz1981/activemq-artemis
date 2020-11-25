@@ -30,9 +30,11 @@ import org.junit.Test;
 
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import org.openjdk.jol.info.GraphLayout;
 
 import static org.apache.activemq.artemis.utils.collections.TypedProperties.searchProperty;
 import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.greaterThanOrEqualTo;
 
 public class TypedPropertiesTest {
 
@@ -287,7 +289,7 @@ public class TypedPropertiesTest {
       props.encode(buf);
       buf.resetReaderIndex();
       Assert.assertFalse(searchProperty(value, buf, 0));
-      props.forEachKey(key -> {
+      props.forEach((key, ignore) -> {
          Assert.assertTrue(searchProperty(key, buf, 0));
          Assert.assertTrue(searchProperty(SimpleString.toSimpleString(key.toString()), buf, 0));
          // concat a string just to check if the search won't perform an eager search to find the string pattern
@@ -411,5 +413,68 @@ public class TypedPropertiesTest {
       t.join();
 
       Assert.assertFalse(error.get());
+   }
+
+   @Test
+   public void testMemoryFootprintAccuracy() {
+      TypedProperties props = new TypedProperties();
+      int totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      int memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putBooleanProperty(SimpleString.toSimpleString("boolean"), true);
+      memoryFootprint = props.getMemoryOffset();
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putByteProperty(SimpleString.toSimpleString("byte"), (byte) 1);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putBytesProperty(SimpleString.toSimpleString("bytes"), new byte[7]);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putCharProperty(SimpleString.toSimpleString("char"), 'c');
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putIntProperty(SimpleString.toSimpleString("int"), 1);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putLongProperty(SimpleString.toSimpleString("long"), 1);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putDoubleProperty(SimpleString.toSimpleString("double"), 1d);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putFloatProperty(SimpleString.toSimpleString("float"), 1f);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putShortProperty(SimpleString.toSimpleString("short"), (short) 1);
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putNullValue(SimpleString.toSimpleString("null"));
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
+
+      props.putSimpleStringProperty(SimpleString.toSimpleString("simpleString"), SimpleString.toSimpleString("string"));
+      totalSize = (int) GraphLayout.parseInstance(props).totalSize();
+      memoryFootprint = props.getMemoryOffset();
+      Assert.assertThat(memoryFootprint, greaterThanOrEqualTo(totalSize));
    }
 }

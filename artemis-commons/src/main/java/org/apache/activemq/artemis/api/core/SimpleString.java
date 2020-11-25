@@ -26,6 +26,8 @@ import org.apache.activemq.artemis.utils.AbstractByteBufPool;
 import org.apache.activemq.artemis.utils.AbstractPool;
 import org.apache.activemq.artemis.utils.ByteUtil;
 import org.apache.activemq.artemis.utils.DataConstants;
+import org.apache.activemq.artemis.utils.Env;
+import org.apache.activemq.artemis.utils.PowerOf2Util;
 
 /**
  * A simple String class that can store all characters, and stores as simple {@code byte[]}, this
@@ -575,6 +577,58 @@ public final class SimpleString implements CharSequence, Serializable, Comparabl
 
          dst[d++] = (char) (low | high);
       }
+   }
+
+   private static final int SIMPLE_STRING_BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 24 : 40;
+
+   /**
+    * This is an eager estimation of the memory footprint of {@code s}.
+    */
+   public static int memoryFootprint(SimpleString s) {
+      if (s == null) {
+         return 0;
+      }
+      int size = SIMPLE_STRING_BASE_BYTES;
+      final String str = s.str;
+      size += memoryFootprint(str);
+      size += memoryFootprint(s.data);
+      return size;
+   }
+
+   // String size handling is complex due to deduplication and compact strings optimizations java >= 9
+   private static final int STRING_BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 24 : 32;
+
+   /**
+    * This is an eager estimation of the memory footprint of {@code s}, not accounting any optimization
+    * of the JVM eg compact strings.
+    */
+   public static int memoryFootprint(String s) {
+      if (s == null) {
+         return 0;
+      }
+      return STRING_BASE_BYTES + memoryFootprintChars(s.length());
+   }
+
+   private static final int CHAR_ARRAY_BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
+
+   public static int memoryFootprint(char[] chars) {
+      if (chars == null) {
+         return 0;
+      }
+      return memoryFootprintChars(chars.length);
+   }
+
+   private static int memoryFootprintChars(int length) {
+      return PowerOf2Util.align(CHAR_ARRAY_BASE_BYTES + length * Character.BYTES, Long.BYTES);
+   }
+
+   private static final int BYTE_ARRAY_BASE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 16 : 24;
+
+   public static int memoryFootprint(byte[] bytes) {
+      if (bytes == null) {
+         return 0;
+      }
+      return PowerOf2Util.align(BYTE_ARRAY_BASE_BYTES + bytes.length, Long.BYTES);
    }
 
    public static final class ByteBufSimpleStringPool extends AbstractByteBufPool<SimpleString> {
