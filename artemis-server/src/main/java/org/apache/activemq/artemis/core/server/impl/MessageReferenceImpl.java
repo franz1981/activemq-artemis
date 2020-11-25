@@ -28,6 +28,7 @@ import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.Queue;
 import org.apache.activemq.artemis.core.server.ServerConsumer;
 import org.apache.activemq.artemis.core.transaction.Transaction;
+import org.apache.activemq.artemis.utils.Env;
 import org.apache.activemq.artemis.utils.collections.LinkedListImpl;
 
 /**
@@ -86,7 +87,7 @@ public class MessageReferenceImpl extends LinkedListImpl.Node<MessageReferenceIm
 
    // Static --------------------------------------------------------
 
-   private static final int memoryOffset = 64;
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 72 : 112;
 
    // Constructors --------------------------------------------------
 
@@ -174,7 +175,7 @@ public class MessageReferenceImpl extends LinkedListImpl.Node<MessageReferenceIm
    }
 
    public static int getMemoryEstimate() {
-      return MessageReferenceImpl.memoryOffset;
+      return MessageReferenceImpl.BYTES;
    }
 
    @Override

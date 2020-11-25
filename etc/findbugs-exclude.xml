@@ -102,12 +102,6 @@ under the License.
     <Bug pattern="NP_NULL_PARAM_DEREF_NONVIRTUAL"/>
   </Match>
 
-  <Match>
-    <!-- Code is meant to measure memory usage, so calling Garbage Collection is normal. -->
-    <Class name="org.apache.activemq.artemis.utils.MemorySize"/>
-    <bug pattern="DM_GC"/>
-  </Match>
-
   <match>
     <!-- Ignore naming convention violations in generated code -->
     <class name="org.apache.activemq.artemis.core.filter.impl.FilterParser"/>

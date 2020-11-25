@@ -130,7 +130,7 @@
       <version.micrometer>1.1.4</version.micrometer>
       <hamcrest.version>2.1</hamcrest.version>
       <surefire.version>2.22.2</surefire.version>
-
+      <jol.version>0.14</jol.version>
       <!-- used on tests -->
       <groovy.version>2.5.10</groovy.version>
       <vertx.version>3.9.4</vertx.version>
@@ -315,6 +315,15 @@
             <scope>test</scope>
             <!-- License: MIT -->
          </dependency>
+
+         <dependency>
+            <groupId>org.openjdk.jol</groupId>
+            <artifactId>jol-core</artifactId>
+            <version>${jol.version}</version>
+            <scope>test</scope>
+            <!-- License: Apache 2.0 -->
+         </dependency>
+
          <!-- ## End Test Dependencies ## -->
 
          <!-- ### Build Time Dependencies ### -->

@@ -20,12 +20,17 @@ package org.apache.activemq.artemis.utils;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 
+import org.jboss.logging.Logger;
+import sun.misc.Unsafe;
+
 /**
  * Utility that detects various properties specific to the current runtime
  * environment, such as JVM bitness and OS type.
  */
 public final class Env {
 
+   private static final Logger LOGGER = Logger.getLogger(Env.class);
+   private static final Boolean USE_32_BIT_OOPS;
    private static final int OS_PAGE_SIZE;
 
    static {
@@ -43,12 +48,46 @@ public final class Env {
             instance = c.newInstance(new Object[0]);
          } catch (Throwable t1) {
             instance = null;
+            LOGGER.debug("sun.misc.Unsafe not available");
          }
       }
+      Boolean use32bitsOops = null;
       if (instance != null) {
          osPageSize = instance.pageSize();
+         try {
+            final int oopsSize = oopsSize(instance);
+            switch (oopsSize) {
+               case Long.BYTES:
+                  use32bitsOops = false;
+                  break;
+               case Integer.BYTES:
+                  use32bitsOops = true;
+                  break;
+            }
+         } catch (Throwable t) {
+            LOGGER.warn("Cannot compute OOPS size", t);
+         }
       }
+      USE_32_BIT_OOPS = use32bitsOops;
       OS_PAGE_SIZE = osPageSize;
+   }
+
+   /**
+    * Poor-man OOPS size estimation: would be better to switch to https://github.com/openjdk/jol
+    */
+   private static int oopsSize(Unsafe unsafe) {
+      class Fields {
+
+         Object a;
+         Object b;
+      }
+      try {
+         final long aOffset = unsafe.objectFieldOffset(Fields.class.getDeclaredField("a"));
+         final long bOffset = unsafe.objectFieldOffset(Fields.class.getDeclaredField("b"));
+         return (int) Math.abs(bOffset - aOffset);
+      } catch (Throwable t) {
+         throw new IllegalStateException(t);
+      }
    }
 
    /**
@@ -65,6 +104,14 @@ public final class Env {
 
    private Env() {
 
+   }
+
+   /**
+    * If {@code true}, the size of a reference is {@link Integer#BYTES}, {@link Long#BYTES} otherwise.
+    * A {@code null} value instead means that the info isn't available.
+    */
+   public static Boolean use32BitOops() {
+      return USE_32_BIT_OOPS;
    }
 
    /**
