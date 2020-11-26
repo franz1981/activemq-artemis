@@ -20,6 +20,7 @@ import org.apache.activemq.artemis.api.core.ActiveMQBuffer;
 import org.apache.activemq.artemis.api.core.ActiveMQException;
 import org.apache.activemq.artemis.api.core.ICoreMessage;
 import org.apache.activemq.artemis.api.core.Message;
+import org.apache.activemq.artemis.api.core.SimpleString;
 import org.apache.activemq.artemis.core.io.SequentialFile;
 import org.apache.activemq.artemis.core.message.LargeBodyReader;
 import org.apache.activemq.artemis.core.message.impl.CoreMessage;
@@ -27,11 +28,14 @@ import org.apache.activemq.artemis.core.persistence.StorageManager;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.CoreLargeServerMessage;
 import org.apache.activemq.artemis.core.server.LargeServerMessage;
-import org.apache.activemq.artemis.utils.DataConstants;
+import org.apache.activemq.artemis.utils.Env;
+import org.apache.activemq.artemis.utils.UUID;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
 
 public final class LargeServerMessageImpl extends CoreMessage implements CoreLargeServerMessage {
+
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 112 : 160;
 
    @Override
    public Message toMessage() {
@@ -250,8 +254,12 @@ public final class LargeServerMessageImpl extends CoreMessage implements CoreLar
    public int getMemoryEstimate() {
       synchronized (largeBody) {
          if (memoryEstimate == -1) {
-            // The body won't be on memory (aways on-file), so we don't consider this for paging
-            memoryEstimate = getHeadersAndPropertiesEncodeSize() + DataConstants.SIZE_INT + getEncodeSize() + (16 + 4) * 2 + 1;
+            final TypedProperties properties = this.properties;
+            memoryEstimate = BYTES +
+               SimpleString.memoryFootprint(address) +
+               UUID.memoryFootprint(userID) +
+               (properties == null ? 0 : properties.getMemoryOffset()) +
+               largeBody.getMemoryEstimate();
          }
 
          return memoryEstimate;

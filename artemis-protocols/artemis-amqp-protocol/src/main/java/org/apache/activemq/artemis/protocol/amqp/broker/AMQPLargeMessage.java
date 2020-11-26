@@ -36,6 +36,7 @@ import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.LargeServerMessage;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.protocol.amqp.util.TLSEncode;
+import org.apache.activemq.artemis.utils.Env;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.amqp.messaging.Header;
 import org.apache.qpid.proton.codec.DecoderImpl;
@@ -43,6 +44,8 @@ import org.apache.qpid.proton.codec.ReadableBuffer;
 import org.apache.qpid.proton.codec.TypeConstructor;
 
 public class AMQPLargeMessage extends AMQPMessage implements LargeServerMessage {
+
+   private static final int BYTES = Env.use32BitOops() ? 168 : 240;
 
    @Override
    public ICoreMessage toCore(CoreMessageObjectPools coreMessageObjectPools) {
@@ -417,7 +420,9 @@ public class AMQPLargeMessage extends AMQPMessage implements LargeServerMessage 
    @Override
    public int getMemoryEstimate() {
       if (memoryEstimate == -1) {
-         memoryEstimate = memoryOffset * 2 + (extraProperties != null ? extraProperties.getEncodeSize() : 0);
+         memoryEstimate = BYTES +
+            (extraProperties != null ? extraProperties.getMemoryOffset() : 0) +
+            (largeBody != null ? largeBody.getMemoryEstimate() : 0);
       }
       return memoryEstimate;
    }

@@ -32,9 +32,14 @@ import org.apache.activemq.artemis.core.message.LargeBodyReader;
 import org.apache.activemq.artemis.core.persistence.StorageManager;
 import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.LargeServerMessage;
+import org.apache.activemq.artemis.utils.Env;
 import org.jboss.logging.Logger;
 
 public class LargeBody {
+
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 64 : 80;
+   // this is an eager estimation that won't take into account the type of sequential file
+   private static final int UNKNOWN_SEQ_FILE_BYTES = Env.use32BitOops() == Boolean.TRUE ? 80 : 120;
 
    private static final Logger logger = Logger.getLogger(LargeBody.class);
 
@@ -110,6 +115,10 @@ public class LargeBody {
       }
 
       file = null;
+   }
+
+   public int getMemoryEstimate() {
+      return BYTES + (file == null ? 0 : UNKNOWN_SEQ_FILE_BYTES);
    }
 
    public synchronized void deleteFile() {

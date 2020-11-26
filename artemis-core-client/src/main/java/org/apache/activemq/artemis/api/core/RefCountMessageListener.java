@@ -21,18 +21,8 @@ package org.apache.activemq.artemis.api.core;
  *  These methods will be called during refCount operations */
 public interface RefCountMessageListener {
 
-   void durableUp(Message message, int durableCount);
+   void refUp(int refMemoryEstimate);
 
-   void durableDown(Message message, int durableCount);
+   void refDown(int refMemoryEstimate);
 
-   void refUp(Message message, int nonDurableCoun);
-
-   void refDown(Message message, int nonDurableCoun);
-
-   default void usageUp(Message message, int usageCount) {
-   }
-
-   default void usageDown(Message message, int usageCount) {
-
-   }
 }

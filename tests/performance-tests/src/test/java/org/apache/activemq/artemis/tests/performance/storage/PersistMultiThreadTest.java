@@ -247,22 +247,12 @@ public class PersistMultiThreadTest extends ActiveMQTestBase {
    class FakePagingStore implements PagingStore {
 
       @Override
-      public void durableDown(Message message, int durableCount) {
+      public void refUp(int refMemoryEstimate) {
 
       }
 
       @Override
-      public void durableUp(Message message, int durableCount) {
-
-      }
-
-      @Override
-      public void refUp(Message message, int nonDurableCoun) {
-
-      }
-
-      @Override
-      public void refDown(Message message, int nonDurableCoun) {
+      public void refDown(int refMemoryEstimate) {
 
       }
 

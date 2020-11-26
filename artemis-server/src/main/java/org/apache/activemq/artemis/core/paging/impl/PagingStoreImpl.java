@@ -52,7 +52,6 @@ import org.apache.activemq.artemis.core.server.ActiveMQServerLogger;
 import org.apache.activemq.artemis.core.server.LargeServerMessage;
 import org.apache.activemq.artemis.core.server.MessageReference;
 import org.apache.activemq.artemis.core.server.RouteContextList;
-import org.apache.activemq.artemis.core.server.impl.MessageReferenceImpl;
 import org.apache.activemq.artemis.core.settings.impl.AddressFullMessagePolicy;
 import org.apache.activemq.artemis.core.settings.impl.AddressSettings;
 import org.apache.activemq.artemis.core.transaction.Transaction;
@@ -955,27 +954,13 @@ public class PagingStoreImpl implements PagingStore {
    }
 
    @Override
-   public void durableDown(Message message, int durableCount) {
-      refDown(message, durableCount);
+   public void refUp(int refMemoryEstimate) {
+      this.addSize(refMemoryEstimate);
    }
 
    @Override
-   public void durableUp(Message message, int durableCount) {
-      refUp(message, durableCount);
-   }
-
-   @Override
-   public void refUp(Message message, int count) {
-      this.addSize(MessageReferenceImpl.getMemoryEstimate());
-   }
-
-   @Override
-   public void refDown(Message message, int count) {
-      if (count < 0) {
-         // this could happen on paged messages since they are not routed and refUp is never called
-         return;
-      }
-      this.addSize(-MessageReferenceImpl.getMemoryEstimate());
+   public void refDown(int refMemoryEstimate) {
+      this.addSize(-refMemoryEstimate);
    }
 
    private void installPageTransaction(final Transaction tx, final RouteContextList listCtx) throws Exception {

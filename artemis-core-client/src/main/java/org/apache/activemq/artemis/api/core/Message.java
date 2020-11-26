@@ -72,12 +72,6 @@ import org.apache.activemq.artemis.core.persistence.Persister;
  */
 public interface Message {
 
-   // This is an estimate of how much memory a Message takes up, excluding body and properties
-   // Note, it is only an estimate, it's not possible to be entirely sure with Java
-   // This figure is calculated using the test utilities in org.apache.activemq.tests.unit.util.sizeof
-   // The value is somewhat higher on 64 bit architectures, probably due to different alignment
-   int memoryOffset = 352;
-
    // We use properties to establish routing context on clustering.
    // However if the client resends the message after receiving, it needs to be removed, so we mark these internal
    Predicate<SimpleString> INTERNAL_PROPERTY_NAMES_PREDICATE =

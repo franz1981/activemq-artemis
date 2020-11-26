@@ -16,6 +16,8 @@
  */
 package org.apache.activemq.artemis.utils;
 
+import org.apache.activemq.artemis.api.core.SimpleString;
+
 /**
  * UUID represents Universally Unique Identifiers (aka Global UID in Windows
  * world). UUIDs are usually generated via UUIDGenerator (or in case of 'Null
@@ -41,6 +43,8 @@ package org.apache.activemq.artemis.utils;
  */
 
 public final class UUID {
+
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 24 : 40;
 
    private static final String kHexChars = "0123456789abcdefABCDEF";
 
@@ -233,6 +237,13 @@ public final class UUID {
          throw new IllegalArgumentException(e);
       }
       return data;
+   }
+
+   public static int memoryFootprint(UUID uuid) {
+      if (uuid == null) {
+         return 0;
+      }
+      return BYTES + SimpleString.memoryFootprint(uuid.mId) + SimpleString.memoryFootprint(uuid.mDesc);
    }
 
    /**

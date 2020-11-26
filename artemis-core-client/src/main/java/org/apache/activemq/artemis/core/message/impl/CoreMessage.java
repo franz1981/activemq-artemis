@@ -45,6 +45,7 @@ import org.apache.activemq.artemis.core.persistence.Persister;
 import org.apache.activemq.artemis.core.protocol.core.impl.PacketImpl;
 import org.apache.activemq.artemis.reader.MessageUtil;
 import org.apache.activemq.artemis.utils.DataConstants;
+import org.apache.activemq.artemis.utils.Env;
 import org.apache.activemq.artemis.utils.UUID;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.jboss.logging.Logger;
@@ -53,6 +54,7 @@ import org.jboss.logging.Logger;
  *  consumers */
 public class CoreMessage extends RefCountMessage implements ICoreMessage {
 
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 104 : 136;
    public static final int BUFFER_HEADER_SPACE = PacketImpl.PACKET_HEADERS_SIZE;
 
    private volatile int memoryEstimate = -1;
@@ -69,8 +71,6 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
    private volatile boolean validBuffer = false;
 
    protected volatile ResetLimitWrappedActiveMQBuffer writableBuffer;
-
-   Object body;
 
    protected int endOfBodyPosition = -1;
 
@@ -93,7 +93,7 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
 
    protected byte priority;
 
-   private UUID userID;
+   protected UUID userID;
 
    private int propertiesLocation = -1;
 
@@ -426,7 +426,6 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
       // with getEncodedBuffer(), otherwise can introduce race condition when delivering concurrently to
       // many subscriptions and bridging to other nodes in a cluster
       synchronized (other) {
-         this.body = other.body;
          this.endOfBodyPosition = other.endOfBodyPosition;
          internalSetMessageID(other.messageID);
          this.address = other.address;
@@ -622,8 +621,10 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
    @Override
    public int getMemoryEstimate() {
       if (memoryEstimate == -1) {
-         memoryEstimate = memoryOffset +
+         final TypedProperties properties = this.properties;
+         memoryEstimate = BYTES +
             (buffer != null ? buffer.capacity() : 0) +
+            UUID.memoryFootprint(userID) +
             (properties != null ? properties.getMemoryOffset() : 0);
       }
 

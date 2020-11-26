@@ -27,6 +27,7 @@ import org.apache.activemq.artemis.core.persistence.Persister;
 import org.apache.activemq.artemis.protocol.amqp.util.NettyWritable;
 import org.apache.activemq.artemis.protocol.amqp.util.TLSEncode;
 import org.apache.activemq.artemis.utils.DataConstants;
+import org.apache.activemq.artemis.utils.Env;
 import org.apache.activemq.artemis.utils.collections.TypedProperties;
 import org.apache.qpid.proton.codec.EncoderImpl;
 import org.apache.qpid.proton.codec.ReadableBuffer;
@@ -35,6 +36,7 @@ import org.apache.qpid.proton.codec.WritableBuffer;
 // see https://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#section-message-format
 public class AMQPStandardMessage extends AMQPMessage {
 
+   private static final int BYTES = Env.use32BitOops() == Boolean.TRUE ? 152 : 208;
    // Buffer and state for the data backing this message.
    protected ReadableBuffer data;
 
@@ -124,7 +126,9 @@ public class AMQPStandardMessage extends AMQPMessage {
    @Override
    public int getMemoryEstimate() {
       if (memoryEstimate == -1) {
-         memoryEstimate = memoryOffset + (data != null ? data.capacity() : 0);
+         memoryEstimate = BYTES +
+            (data != null ? data.capacity() : 0) +
+            (extraProperties != null ? extraProperties.getMemoryOffset() : 0);
       }
 
       return memoryEstimate;

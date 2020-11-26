@@ -1010,7 +1010,8 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
          }
       }
       if (pagingStore != null) {
-         pagingStore.refUp(messageReference.getMessage(), count);
+         assert !messageReference.isPaged();
+         pagingStore.refUp(MessageReferenceImpl.getMemoryEstimate());
       }
    }
 
@@ -1023,7 +1024,12 @@ public class QueueImpl extends CriticalComponentImpl implements Queue {
          }
       }
       if (pagingStore != null) {
-         pagingStore.refDown(messageReference.getMessage(), count);
+         // this could happen on paged messages since they are not routed and refUp is never called
+         if (count < 0) {
+            return;
+         }
+         assert !messageReference.isPaged();
+         pagingStore.refDown(MessageReferenceImpl.getMemoryEstimate());
       }
    }
 
