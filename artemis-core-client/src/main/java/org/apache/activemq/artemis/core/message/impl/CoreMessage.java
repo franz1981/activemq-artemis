@@ -57,7 +57,7 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
 
    public static final int BUFFER_HEADER_SPACE = PacketImpl.PACKET_HEADERS_SIZE;
 
-   private volatile int memoryEstimate = -1;
+   protected volatile int memoryEstimate = -1;
 
    private static final Logger logger = Logger.getLogger(CoreMessage.class);
 
