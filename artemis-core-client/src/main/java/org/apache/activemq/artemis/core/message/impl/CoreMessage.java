@@ -618,6 +618,14 @@ public class CoreMessage extends RefCountMessage implements ICoreMessage {
       return new RuntimeException(e.getMessage(), e);
    }
 
+   /**
+    * This method is used on tests and it just help tracking if any {@link TypedProperties} has been decoded yet.<br>
+    * Beware, it can return {@code false} with racing calls that could decode {@link TypedProperties}.
+    */
+   public boolean hasDecodedProperties() {
+      return properties != null;
+   }
+
    @Override
    public int getMemoryEstimate() {
       if (memoryEstimate == -1) {
