@@ -655,6 +655,13 @@ public interface Configuration {
    File getJournalLocation();
 
    /**
+    * The location of the data related to artemis.instance.
+    *
+    * @return
+    */
+   File getDataLocation();
+
+   /**
     * The location of the node manager lock file related to artemis.instance.
     */
    File getNodeManagerLockLocation();

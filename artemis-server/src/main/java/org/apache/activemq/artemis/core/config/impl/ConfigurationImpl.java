@@ -206,6 +206,8 @@ public class ConfigurationImpl implements Configuration, Serializable {
 
    protected long journalRetentionPeriod;
 
+   protected final String dataDirectory =  ActiveMQDefaultConfiguration.getDefaultDataDir();
+
    protected String nodeManagerLockDirectory = null;
 
    protected boolean createJournalDir = ActiveMQDefaultConfiguration.isDefaultCreateJournalDir();
@@ -958,6 +960,11 @@ public class ConfigurationImpl implements Configuration, Serializable {
    public ConfigurationImpl setReadWholePage(boolean read) {
       readWholePage = read;
       return this;
+   }
+
+   @Override
+   public File getDataLocation() {
+      return subFolder(dataDirectory);
    }
 
    @Override
