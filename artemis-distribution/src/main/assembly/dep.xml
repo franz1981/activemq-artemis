@@ -116,6 +116,12 @@
             <include>org.objenesis:objenesis</include>
             <include>com.typesafe:config</include>
             <include>io.github.classgraph:classgraph</include>
+
+            <include>org.apache.curator:curator-recipes</include>
+            <include>org.apache.curator:curator-client</include>
+            <include>org.apache.curator:curator-framework</include>
+            <include>org.apache.zookeeper:zookeeper</include>
+            <include>org.apache.zookeeper:zookeeper-jute</include>
          </includes>
          <!--excludes>
             <exclude>org.apache.activemq:artemis-website</exclude>
