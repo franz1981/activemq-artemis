@@ -21,7 +21,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -94,6 +94,9 @@ import org.jboss.logging.Logger;
 public final class ReplicationEndpoint implements ChannelHandler, ActiveMQComponent {
 
    private static final Logger logger = Logger.getLogger(ReplicationEndpoint.class);
+   // this.pendingPacketsSize is allowed to grow over MAX_BATCH_SIZE, but will be flushed right after
+   // setting this to <=0 disable batching
+   private static final long MAX_BATCH_SIZE = Long.getLong("replica.response.batch", Long.MAX_VALUE);
 
    private final IOCriticalErrorListener criticalErrorListener;
    private final ActiveMQServerImpl server;
@@ -134,8 +137,9 @@ public final class ReplicationEndpoint implements ChannelHandler, ActiveMQCompon
 
    private List<Interceptor> outgoingInterceptors = null;
 
-   private final ArrayList<Packet> pendingPackets;
+   private final ArrayDeque<Packet> pendingPackets;
 
+   private long pendingPacketsSize;
 
    // Constructors --------------------------------------------------
    public ReplicationEndpoint(final ActiveMQServerImpl server,
@@ -146,8 +150,9 @@ public final class ReplicationEndpoint implements ChannelHandler, ActiveMQCompon
       this.criticalErrorListener = criticalErrorListener;
       this.wantedFailBack = wantedFailBack;
       this.activation = activation;
-      this.pendingPackets = new ArrayList<>();
+      this.pendingPackets = new ArrayDeque<>();
       this.supportResponseBatching = false;
+      this.pendingPacketsSize = 0;
    }
 
    // Public --------------------------------------------------------
@@ -251,7 +256,7 @@ public final class ReplicationEndpoint implements ChannelHandler, ActiveMQCompon
             logger.trace("Returning " + response);
          }
          if (supportResponseBatching) {
-            pendingPackets.add(response);
+            addOToResponseBatch(response);
          } else {
             channel.send(response);
          }
@@ -260,20 +265,31 @@ public final class ReplicationEndpoint implements ChannelHandler, ActiveMQCompon
       }
    }
 
+   private void addOToResponseBatch(PacketImpl response) {
+      assert supportResponseBatching;
+      final int responseSize = response.expectedEncodeSize();
+      pendingPackets.add(response);
+      pendingPacketsSize += responseSize;
+      if (pendingPacketsSize >= MAX_BATCH_SIZE) {
+         endOfBatch();
+      }
+   }
+
    @Override
    public void endOfBatch() {
-      final ArrayList<Packet> pendingPackets = this.pendingPackets;
+      final ArrayDeque<Packet> pendingPackets = this.pendingPackets;
       if (pendingPackets.isEmpty()) {
          return;
       }
       try {
          for (int i = 0, size = pendingPackets.size(); i < size; i++) {
-            final Packet packet = pendingPackets.get(i);
+            final Packet packet = pendingPackets.poll();
             final boolean isLast = i == (size - 1);
             channel.send(packet, isLast);
          }
       } finally {
          pendingPackets.clear();
+         pendingPacketsSize = 0;
       }
    }
 
