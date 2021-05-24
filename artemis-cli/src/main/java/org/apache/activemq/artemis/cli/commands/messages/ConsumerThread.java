@@ -30,10 +30,14 @@ import javax.jms.TextMessage;
 import javax.jms.Topic;
 import java.util.Enumeration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.function.LongSupplier;
+
+import org.HdrHistogram.ValueRecorder;
 
 public class ConsumerThread extends Thread {
 
-   int messageCount = 1000;
+   long messageCount = 1000;
    int receiveTimeOut = 3000;
    Destination destination;
    Session session;
@@ -46,17 +50,35 @@ public class ConsumerThread extends Thread {
 
    String filter;
 
-   int received = 0;
+   LongAdder totalReceived;
+   long received = 0;
    int transactions = 0;
-   boolean running = false;
+   volatile boolean running = false;
    CountDownLatch finished;
    boolean bytesAsText;
    MessageListener listener;
+   ValueRecorder recorder;
+   LongSupplier timeProvider;
 
    public ConsumerThread(Session session, Destination destination, int threadNr) {
       super("Consumer " + destination.toString() + ", thread=" + threadNr);
       this.destination = destination;
       this.session = session;
+   }
+
+   public ConsumerThread setTimeProvider(LongSupplier provider) {
+      this.timeProvider = provider;
+      return this;
+   }
+
+   public ConsumerThread setRecorder(ValueRecorder recorder) {
+      this.recorder = recorder;
+      return this;
+   }
+
+   public ConsumerThread setTotalReceived(LongAdder totalReceived) {
+      this.totalReceived = totalReceived;
+      return this;
    }
 
    @Override
@@ -69,44 +91,59 @@ public class ConsumerThread extends Thread {
    }
 
    private void handle(Message msg, boolean browse) throws JMSException {
+      final MessageListener listener = this.listener;
       if (listener != null) {
          listener.onMessage(msg);
+         return;
+      }
+      handleNoListener(msg, browse);
+   }
+
+   private void handleNoListener(Message msg, boolean browse) throws JMSException {
+      assert listener == null;
+      if (browse) {
+         handleBrowse(msg);
       } else {
-         if (browse) {
-            if (verbose) {
-               System.out.println("..." + msg);
-            }
-            if (bytesAsText && (msg instanceof BytesMessage)) {
-               long length = ((BytesMessage) msg).getBodyLength();
-               byte[] bytes = new byte[(int) length];
-               ((BytesMessage) msg).readBytes(bytes);
-               System.out.println("Message:" + msg);
-            }
-         } else {
-            if (verbose) {
-               if (bytesAsText && (msg instanceof BytesMessage)) {
-                  long length = ((BytesMessage) msg).getBodyLength();
-                  byte[] bytes = new byte[(int) length];
-                  ((BytesMessage) msg).readBytes(bytes);
-                  System.out.println("Received a message with " + bytes.length);
-               }
-
-               if (msg instanceof TextMessage) {
-                  String text = ((TextMessage) msg).getText();
-                  System.out.println("Received text sized at " + text.length());
-               }
-
-               if (msg instanceof ObjectMessage) {
-                  Object obj = ((ObjectMessage) msg).getObject();
-                  System.out.println("Received object " + obj.toString().length());
-               }
-            }
+         if (verbose) {
+            verboseReceive(msg);
          }
+      }
+   }
+
+   private void verboseReceive(Message msg) throws JMSException {
+      if (bytesAsText && (msg instanceof BytesMessage)) {
+         long length = ((BytesMessage) msg).getBodyLength();
+         byte[] bytes = new byte[(int) length];
+         ((BytesMessage) msg).readBytes(bytes);
+         System.out.println("Received a message with " + bytes.length);
+      }
+
+      if (msg instanceof TextMessage) {
+         String text = ((TextMessage) msg).getText();
+         System.out.println("Received text sized at " + text.length());
+      }
+
+      if (msg instanceof ObjectMessage) {
+         Object obj = ((ObjectMessage) msg).getObject();
+         System.out.println("Received object " + obj.toString().length());
+      }
+   }
+
+   private void handleBrowse(Message msg) throws JMSException {
+      if (verbose) {
+         System.out.println("..." + msg);
+      }
+      if (bytesAsText && (msg instanceof BytesMessage)) {
+         long length = ((BytesMessage) msg).getBodyLength();
+         byte[] bytes = new byte[(int) length];
+         ((BytesMessage) msg).readBytes(bytes);
+         System.out.println("Message:" + msg);
       }
    }
 
    public void browse() {
       running = true;
+      final LongAdder totalReceived = this.totalReceived;
       QueueBrowser consumer = null;
       String threadName = Thread.currentThread().getName();
       System.out.println(threadName + " trying to browse " + messageCount + " messages");
@@ -124,6 +161,9 @@ public class ConsumerThread extends Thread {
                System.out.println(threadName + " browsing " + (msg instanceof TextMessage ? ((TextMessage) msg).getText() : msg.getJMSMessageID()));
                handle(msg, true);
                received++;
+               if (totalReceived != null) {
+                  totalReceived.increment();
+               }
 
                if (received >= messageCount) {
                   break;
@@ -162,7 +202,11 @@ public class ConsumerThread extends Thread {
       running = true;
       MessageConsumer consumer = null;
       String threadName = Thread.currentThread().getName();
-      System.out.println(threadName + " wait until " + messageCount + " messages are consumed");
+      final long expectedMessages = Long.MAX_VALUE;
+      if (messageCount >= 0) {
+         messageCount = expectedMessages;
+         System.out.println(threadName + " wait until " + messageCount + " messages are consumed");
+      }
       try {
          if (durable && destination instanceof Topic) {
             if (filter != null) {
@@ -178,19 +222,30 @@ public class ConsumerThread extends Thread {
             }
          }
          long tStart = System.currentTimeMillis();
-         int count = 0;
-         while (running && received < messageCount) {
+         final ValueRecorder recorder = this.recorder;
+         final LongSupplier timeProvider = this.timeProvider;
+         final LongAdder totalReceived = this.totalReceived;
+         while (running && received < expectedMessages) {
             Message msg = consumer.receive(receiveTimeOut);
             if (msg != null) {
                if (verbose) {
                   System.out.println(threadName + " Received " + (msg instanceof TextMessage ? ((TextMessage) msg).getText() : msg.getJMSMessageID()));
-               } else {
-                  if (++count % 1000 == 0) {
-                     System.out.println("Received " + count);
+               }
+               if (!browse) {
+                  if (recorder != null && timeProvider != null) {
+                     final long startUs = msg.getLongProperty("_");
+                     final long usLatency = timeProvider.getAsLong() - startUs;
+                     if (usLatency < 0) {
+                        System.err.println("Timestamp misalignment with sender machine: negative latency!");
+                     }
+                     recorder.recordValue(usLatency);
                   }
                }
                handle(msg, false);
                received++;
+               if (totalReceived != null) {
+                  totalReceived.increment();
+               }
             } else {
                if (breakOnNull) {
                   break;
@@ -199,12 +254,16 @@ public class ConsumerThread extends Thread {
 
             if (session.getTransacted()) {
                if (batchSize > 0 && received > 0 && received % batchSize == 0) {
-                  System.out.println(threadName + " Committing transaction: " + transactions++);
+                  if (verbose) {
+                     System.out.println(threadName + " Committing transaction: " + transactions++);
+                  }
                   session.commit();
                }
             } else if (session.getAcknowledgeMode() == Session.CLIENT_ACKNOWLEDGE && msg != null) {
                if (batchSize > 0 && received > 0 && received % batchSize == 0) {
-                  System.out.println("Acknowledging last " + batchSize + " messages; messages so far = " + received);
+                  if (verbose) {
+                     System.out.println("Acknowledging last " + batchSize + " messages; messages so far = " + received);
+                  }
                   msg.acknowledge();
                }
             }
@@ -220,7 +279,6 @@ public class ConsumerThread extends Thread {
          }
 
 
-         System.out.println(threadName + " Consumed: " + this.getMessageCount() + " messages");
          long tEnd = System.currentTimeMillis();
          long elapsed = (tEnd - tStart) / 1000;
          System.out.println(threadName + " Elapsed time in second : " + elapsed + " s");
@@ -245,7 +303,7 @@ public class ConsumerThread extends Thread {
       System.out.println(threadName + " Consumer thread finished");
    }
 
-   public int getReceived() {
+   public long getReceived() {
       return received;
    }
 
@@ -277,7 +335,7 @@ public class ConsumerThread extends Thread {
       return this;
    }
 
-   public int getMessageCount() {
+   public long getMessageCount() {
       return messageCount;
    }
 
