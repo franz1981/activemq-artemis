@@ -25,9 +25,14 @@ import javax.jms.MessageListener;
 import javax.jms.Session;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.LongAdder;
 
 import io.airlift.airline.Command;
 import io.airlift.airline.Option;
+import org.HdrHistogram.Recorder;
+import org.HdrHistogram.SingleWriterRecorder;
+import org.HdrHistogram.ValueRecorder;
 import org.apache.activemq.artemis.cli.commands.ActionContext;
 import org.apache.activemq.artemis.cli.factory.serialize.MessageSerializer;
 
@@ -48,6 +53,12 @@ public class Consumer extends DestAbstract {
 
    @Option(name = "--data", description = "serialize the messages to the specified file as they are consumed")
    String file;
+
+   @Option(name = "--out", description = "collect latency stats into this file")
+   String out = null;
+
+   @Option(name = "--sample-time", description = "collect latency stats at this ms interval. 1000 ms by default")
+   long sampleTime = 1000;
 
    @Override
    public Object execute(ActionContext context) throws Exception {
@@ -76,6 +87,16 @@ public class Consumer extends DestAbstract {
          serializer.start();
       }
 
+      ValueRecorder recorder = null;
+      if (out != null) {
+         if (threads == 1) {
+            recorder = new SingleWriterRecorder(2);
+         } else {
+            recorder = new Recorder(2);
+         }
+      }
+      LongAdder counter = new LongAdder();
+
       ConnectionFactory factory = createConnectionFactory();
 
       try (Connection connection = factory.createConnection()) {
@@ -102,8 +123,16 @@ public class Consumer extends DestAbstract {
                .setReceiveTimeOut(receiveTimeout)
                .setFilter(filter)
                .setBrowse(false)
-               .setListener(listener);
+               .setListener(listener)
+               .setRecorder(recorder)
+               .setTotalReceived(counter);
          }
+
+         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            for (ConsumerThread consumerThread : threadsArray) {
+               consumerThread.setRunning(false);
+            }
+         }));
 
          for (ConsumerThread thread : threadsArray) {
             thread.start();
@@ -111,18 +140,25 @@ public class Consumer extends DestAbstract {
 
          connection.start();
 
-         int received = 0;
+         final AtomicBoolean exitStats = new AtomicBoolean();
 
-         for (ConsumerThread thread : threadsArray) {
-            thread.join();
-            received += thread.getReceived();
-         }
-
+         Thread consumerJoiner = new Thread(() -> {
+            try {
+               for (ConsumerThread thread : threadsArray) {
+                  thread.join();
+               }
+            } catch (Throwable e) {
+               //
+            } finally {
+               exitStats.set(true);
+            }
+         });
+         consumerJoiner.start();
+         StatsUtil.printAndCollectStats(out, counter, recorder, sampleTime, exitStats::get);
          if (serializer != null) {
             serializer.stop();
          }
-
-         return received;
+         return counter.sum();
       }
    }
 

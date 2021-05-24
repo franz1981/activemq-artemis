@@ -28,17 +28,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URL;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
+import java.util.concurrent.locks.LockSupport;
+import java.util.function.LongSupplier;
 
-import org.apache.activemq.artemis.utils.ReusableLatch;
+import org.HdrHistogram.ValueRecorder;
 
 public class ProducerThread extends Thread {
 
    protected final Session session;
-
+   long target = -1;
    boolean verbose;
-   int messageCount = 1000;
-   boolean runIndefinitely = false;
+   long messageCount = 1000;
    Destination destination;
    int sleep = 0;
    boolean persistent = true;
@@ -50,14 +52,14 @@ public class ProducerThread extends Thread {
    int transactionBatchSize;
 
    int transactions = 0;
-   final AtomicInteger sentCount = new AtomicInteger(0);
+   LongAdder sentCount;
    String message = null;
    String messageText = null;
    String payloadUrl = null;
    byte[] payload = null;
-   boolean running = false;
-   final ReusableLatch finished = new ReusableLatch(1);
-   final ReusableLatch paused = new ReusableLatch(0);
+   volatile boolean running = true;
+   ValueRecorder recorder;
+   LongSupplier timeProvider;
 
    public ProducerThread(Session session, Destination destination, int threadNr) {
       super("Producer " + destination.toString() + ", thread=" + threadNr);
@@ -67,6 +69,18 @@ public class ProducerThread extends Thread {
 
    @Override
    public void run() {
+      final LongSupplier timeProvider = this.timeProvider;
+      final ValueRecorder recorder = this.recorder;
+      final long target = this.target;
+      long usPeriod = 0;
+      if (target >= 0) {
+         usPeriod = TimeUnit.SECONDS.toMicros(1) / target;
+      }
+      long expectedMessages = Long.MAX_VALUE;
+      if (messageCount >= 0) {
+         expectedMessages = messageCount;
+      }
+      long count = 0;
       MessageProducer producer = null;
       String threadName = Thread.currentThread().getName();
       try {
@@ -74,22 +88,27 @@ public class ProducerThread extends Thread {
          producer.setDeliveryMode(persistent ? DeliveryMode.PERSISTENT : DeliveryMode.NON_PERSISTENT);
          producer.setTimeToLive(msgTTL);
          initPayLoad();
-         running = true;
-
          System.out.println(threadName + " Started to calculate elapsed time ...\n");
          long tStart = System.currentTimeMillis();
-
-         if (runIndefinitely) {
-            while (running) {
-               paused.await();
-               sendMessage(producer, threadName);
-               sentCount.incrementAndGet();
+         long nextExpectedUs = timeProvider.getAsLong();
+         long nextTime = nextExpectedUs + usPeriod;
+         while (running && count < expectedMessages) {
+            final long sendTime;
+            if (usPeriod > 0) {
+               // accounting for coordinated omission
+               sendTime = nextTime;
+               nextTime = waitUntilNextTime(nextTime, usPeriod, timeProvider);
+            } else {
+               sendTime = timeProvider.getAsLong();
             }
-         } else {
-            for (sentCount.set(0); sentCount.get() < messageCount && running; sentCount.incrementAndGet()) {
-               paused.await();
-               sendMessage(producer, threadName);
+            final long beforeSend = sendMessage(producer, threadName, count, sendTime);
+            if (recorder != null) {
+               final long afterSend = System.nanoTime();
+               // this is including session::commit on transactions (that's ok!)
+               recorder.recordValue(afterSend - beforeSend);
             }
+            count++;
+            sentCount.increment();
          }
 
          try {
@@ -97,7 +116,7 @@ public class ProducerThread extends Thread {
          } catch (Throwable ignored) {
          }
 
-         System.out.println(threadName + " Produced: " + this.getSentCount() + " messages");
+         System.out.println(threadName + " Produced: " + count + " messages");
          long tEnd = System.currentTimeMillis();
          long elapsed = (tEnd - tStart) / 1000;
          System.out.println(threadName + " Elapsed time in second : " + elapsed + " s");
@@ -106,9 +125,6 @@ public class ProducerThread extends Thread {
       } catch (Exception e) {
          e.printStackTrace();
       } finally {
-         if (finished != null) {
-            finished.countDown();
-         }
          if (producer != null) {
             try {
                producer.close();
@@ -119,22 +135,34 @@ public class ProducerThread extends Thread {
       }
    }
 
-   private void sendMessage(MessageProducer producer, String threadName) throws Exception {
-      Message message = createMessage(sentCount.get(), threadName);
+   private static long waitUntilNextTime(final long nextTime,
+                                         final long usPeriod,
+                                         LongSupplier timeProvider) throws InterruptedException {
+      final long now = timeProvider.getAsLong();
+      TimeUnit.MICROSECONDS.sleep(nextTime - timeProvider.getAsLong());
+      return now + usPeriod;
+   }
 
+   private long sendMessage(MessageProducer producer, String threadName, long count, long sendTime) throws Exception {
+      Message message = createMessage(count, threadName);
+      message.setLongProperty("_", sendTime);
+      final long now = System.nanoTime();
       producer.send(message);
       if (verbose) {
          System.out.println(threadName + " Sent: " + (message instanceof TextMessage ? ((TextMessage) message).getText() : message.getJMSMessageID()));
       }
 
-      if (transactionBatchSize > 0 && sentCount.get() > 0 && sentCount.get() % transactionBatchSize == 0) {
-         System.out.println(threadName + " Committing transaction: " + transactions++);
+      if (transactionBatchSize > 0 && count > 0 && count % transactionBatchSize == 0) {
+         if (verbose) {
+            System.out.println(threadName + " Committing transaction: " + transactions++);
+         }
          session.commit();
       }
 
       if (sleep > 0) {
          Thread.sleep(sleep);
       }
+      return now;
    }
 
    private void initPayLoad() {
@@ -146,11 +174,12 @@ public class ProducerThread extends Thread {
       }
    }
 
-   protected Message createMessage(int i, String threadName) throws Exception {
+   protected Message createMessage(long i, String threadName) throws Exception {
       Message answer;
       if (payload != null) {
-         answer = session.createBytesMessage();
-         ((BytesMessage) answer).writeBytes(payload);
+         BytesMessage msg = session.createBytesMessage();
+         msg.writeBytes(payload);
+         answer = msg;
       } else {
          if (textMessageSize > 0 || objectSize > 0) {
 
@@ -162,7 +191,7 @@ public class ProducerThread extends Thread {
                if (read.length() == textMessageSize) {
                   messageText = read;
                } else {
-                  StringBuffer buffer = new StringBuffer(read);
+                  StringBuilder buffer = new StringBuilder(read);
                   while (buffer.length() < textMessageSize) {
                      buffer.append(read);
                   }
@@ -188,12 +217,12 @@ public class ProducerThread extends Thread {
          answer.setStringProperty("JMSXGroupID", msgGroupID);
       }
 
-      answer.setIntProperty("count", i);
+      answer.setLongProperty("count", i);
       answer.setStringProperty("ThreadSent", threadName);
       return answer;
    }
 
-   private String readInputStream(InputStream is, int size, int messageNumber) throws IOException {
+   private static String readInputStream(InputStream is, int size, long messageNumber) throws IOException {
       try (InputStreamReader reader = new InputStreamReader(is)) {
          char[] buffer;
          if (size > 0) {
@@ -214,11 +243,11 @@ public class ProducerThread extends Thread {
       }
    }
 
-   private String createDefaultMessage(int messageNumber) {
+   private static String createDefaultMessage(long messageNumber) {
       return "test message: " + messageNumber;
    }
 
-   public ProducerThread setMessageCount(int messageCount) {
+   public ProducerThread setMessageCount(long messageCount) {
       this.messageCount = messageCount;
       return this;
    }
@@ -232,12 +261,8 @@ public class ProducerThread extends Thread {
       return this;
    }
 
-   public int getMessageCount() {
+   public long getMessageCount() {
       return messageCount;
-   }
-
-   public int getSentCount() {
-      return sentCount.get();
    }
 
    public boolean isPersistent() {
@@ -247,10 +272,6 @@ public class ProducerThread extends Thread {
    public ProducerThread setPersistent(boolean persistent) {
       this.persistent = persistent;
       return this;
-   }
-
-   public boolean isRunning() {
-      return running;
    }
 
    public ProducerThread setRunning(boolean running) {
@@ -303,15 +324,6 @@ public class ProducerThread extends Thread {
       return this;
    }
 
-   public ReusableLatch getFinished() {
-      return finished;
-   }
-
-   public ProducerThread setFinished(int value) {
-      finished.setCount(value);
-      return this;
-   }
-
    public String getPayloadUrl() {
       return payloadUrl;
    }
@@ -330,30 +342,6 @@ public class ProducerThread extends Thread {
       return this;
    }
 
-   public boolean isRunIndefinitely() {
-      return runIndefinitely;
-   }
-
-   public ProducerThread setRunIndefinitely(boolean runIndefinitely) {
-      this.runIndefinitely = runIndefinitely;
-      return this;
-   }
-
-   public ProducerThread pauseProducer() {
-      this.paused.countUp();
-      return this;
-   }
-
-   public ProducerThread resumeProducer() {
-      this.paused.countDown();
-      return this;
-   }
-
-   public ProducerThread resetCounters() {
-      this.sentCount.set(0);
-      return this;
-   }
-
    public boolean isVerbose() {
       return verbose;
    }
@@ -369,6 +357,26 @@ public class ProducerThread extends Thread {
 
    public ProducerThread setObjectSize(int objectSize) {
       this.objectSize = objectSize;
+      return this;
+   }
+
+   public ProducerThread setSentCount(LongAdder sentCount) {
+      this.sentCount = sentCount;
+      return this;
+   }
+
+   public ProducerThread setTarget(long target) {
+      this.target = target;
+      return this;
+   }
+
+   public ProducerThread setRecorder(ValueRecorder recorder) {
+      this.recorder = recorder;
+      return this;
+   }
+
+   public ProducerThread setTimeProvider(LongSupplier timeProvider) {
+      this.timeProvider = timeProvider;
       return this;
    }
 }

@@ -53,7 +53,7 @@ public class ConsumerThread extends Thread {
    LongAdder totalReceived;
    long received = 0;
    int transactions = 0;
-   volatile boolean running = false;
+   volatile boolean running = true;
    CountDownLatch finished;
    boolean bytesAsText;
    MessageListener listener;
@@ -142,7 +142,6 @@ public class ConsumerThread extends Thread {
    }
 
    public void browse() {
-      running = true;
       final LongAdder totalReceived = this.totalReceived;
       QueueBrowser consumer = null;
       String threadName = Thread.currentThread().getName();
@@ -199,13 +198,12 @@ public class ConsumerThread extends Thread {
    }
 
    public void consume() {
-      running = true;
       MessageConsumer consumer = null;
       String threadName = Thread.currentThread().getName();
-      final long expectedMessages = Long.MAX_VALUE;
+      long expectedMessages = Long.MAX_VALUE;
       if (messageCount >= 0) {
-         messageCount = expectedMessages;
-         System.out.println(threadName + " wait until " + messageCount + " messages are consumed");
+         expectedMessages = messageCount;
+         System.out.println(threadName + " wait until " + expectedMessages + " messages are consumed");
       }
       try {
          if (durable && destination instanceof Topic) {
@@ -352,10 +350,6 @@ public class ConsumerThread extends Thread {
       return this;
    }
 
-   public boolean isRunning() {
-      return running;
-   }
-
    public ConsumerThread setRunning(boolean running) {
       this.running = running;
       return this;
@@ -415,7 +409,8 @@ public class ConsumerThread extends Thread {
       return this;
    }
 
-   public void setListener(MessageListener listener) {
+   public ConsumerThread setListener(MessageListener listener) {
       this.listener = listener;
+      return this;
    }
 }

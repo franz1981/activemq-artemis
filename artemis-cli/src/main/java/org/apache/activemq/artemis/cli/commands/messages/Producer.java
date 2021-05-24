@@ -61,6 +61,12 @@ public class Producer extends DestAbstract {
    @Option(name = "--data", description = "Messages will be read form the specified file, other message options will be ignored.")
    String file = null;
 
+   @Option(name = "--out", description = "collect latency stats into this file")
+   String out = null;
+
+   @Option(name = "--sample-time", description = "collect latency stats at this ms interval. 1000 ms by default")
+   long sampleTime = 1000;
+
    public boolean isNonpersistent() {
       return nonpersistent;
    }
