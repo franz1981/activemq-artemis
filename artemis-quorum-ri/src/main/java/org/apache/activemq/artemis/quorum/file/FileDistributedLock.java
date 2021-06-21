@@ -18,16 +18,23 @@ package org.apache.activemq.artemis.quorum.file;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.function.Consumer;
 
 import org.apache.activemq.artemis.quorum.DistributedLock;
+import org.apache.activemq.artemis.quorum.UnavailableStateException;
 
 final class FileDistributedLock implements DistributedLock {
 
+   private static final int HOLDER_ID_BYTES_LENGTH = UUID.randomUUID().toString().getBytes().length;
+   private static final byte[] NO_HOLDER = new byte[HOLDER_ID_BYTES_LENGTH];
    private final String lockId;
    private final Consumer<String> onClosedLock;
    private boolean closed;
@@ -45,6 +52,28 @@ final class FileDistributedLock implements DistributedLock {
    private void checkNotClosed() {
       if (closed) {
          throw new IllegalStateException("This lock is closed");
+      }
+   }
+
+   @Override
+   public Optional<String> version() throws UnavailableStateException {
+      checkNotClosed();
+      try {
+         if (channel.size() < 0) {
+            return Optional.empty();
+         }
+      } catch (IOException ioException) {
+         throw new UnavailableStateException(ioException);
+      }
+      final byte[] holderId = new byte[HOLDER_ID_BYTES_LENGTH];
+      try {
+         channel.read(ByteBuffer.wrap(holderId), 0);
+         if (Arrays.equals(holderId, NO_HOLDER)) {
+            return Optional.empty();
+         }
+         return Optional.of(new String(holderId));
+      } catch (IOException ioException) {
+         throw new UnavailableStateException(ioException);
       }
    }
 
@@ -84,7 +113,19 @@ final class FileDistributedLock implements DistributedLock {
          return false;
       }
       this.fileLock = lock;
-      return true;
+      try {
+         channel.write(ByteBuffer.wrap(UUID.randomUUID().toString().getBytes()), 0);
+         return true;
+      } catch (IOException ioException) {
+         try {
+            this.fileLock.release();
+         } catch (IOException e) {
+            // no-nop
+         } finally {
+            this.fileLock = null;
+         }
+         return false;
+      }
    }
 
    @Override
@@ -93,6 +134,11 @@ final class FileDistributedLock implements DistributedLock {
       final FileLock fileLock = this.fileLock;
       if (fileLock != null) {
          this.fileLock = null;
+         try {
+            channel.write(ByteBuffer.wrap(NO_HOLDER), 0);
+         } catch (IOException ie) {
+            // it's a problem! stale holder
+         }
          try {
             fileLock.close();
          } catch (IOException e) {

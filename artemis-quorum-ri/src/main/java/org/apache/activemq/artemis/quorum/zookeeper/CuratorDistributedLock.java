@@ -17,6 +17,8 @@
 package org.apache.activemq.artemis.quorum.zookeeper;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -29,9 +31,12 @@ import org.apache.curator.framework.recipes.locks.InterProcessSemaphoreV2;
 import org.apache.curator.framework.recipes.locks.Lease;
 import org.apache.curator.framework.state.ConnectionState;
 import org.apache.curator.framework.state.ConnectionStateListener;
+import org.apache.zookeeper.KeeperException;
+import org.jboss.logging.Logger;
 
 final class CuratorDistributedLock implements DistributedLock, ConnectionStateListener {
 
+   private static final Logger LOGGER = Logger.getLogger(CuratorDistributedLock.class);
    private final String lockId;
    private final InterProcessSemaphoreV2 ipcSem;
    private final Consumer<CuratorDistributedLock> onClose;
@@ -97,6 +102,40 @@ final class CuratorDistributedLock implements DistributedLock, ConnectionStateLi
    }
 
    @Override
+   public synchronized Optional<String> version() throws UnavailableStateException {
+      checkNotClosed();
+      if (unavailable) {
+         throw new UnavailableStateException(lockId + " holder isn't available");
+      }
+      try {
+         final Collection<String> owner = ipcSem.getParticipantNodes();
+         if (lease != null) {
+            if (!owner.contains(lease.getNodeName())) {
+               LOGGER.warnf("The %s lock should be held by %s, while it's held by %s. Consider raising session-ms.",
+                            lockId, lease.getNodeName(), owner);
+            }
+         }
+         if (owner.isEmpty()) {
+            return Optional.empty();
+         }
+         if (owner.size() > 1) {
+            LOGGER.warnf("The %s lock is supposed to have just 1 participant node, while it contains %s", lockId, owner);
+         }
+         return Optional.of(owner.iterator().next());
+      } catch (KeeperException.NoNodeException e) {
+         if (lease != null) {
+            LOGGER.warnf("The %s lock should be held by %s, while it's node has been already deleted. Consider raising session-ms.",
+                         lockId, lease.getNodeName());
+         }
+         LOGGER.debugf(e, "The %s lock has never been acquired before.", lockId);
+         // the semaphore has never been acquired before
+         return Optional.empty();
+      } catch (Throwable t) {
+         throw new UnavailableStateException(t);
+      }
+   }
+
+   @Override
    public synchronized boolean isHeldByCaller() throws UnavailableStateException {
       checkNotClosed();
       if (unavailable) {
@@ -123,7 +162,8 @@ final class CuratorDistributedLock implements DistributedLock, ConnectionStateLi
          throw new UnavailableStateException(lockId + " lock state isn't available");
       }
       try {
-         final byte[] leaseVersion = UUID.randomUUID().toString().getBytes();
+         final String uuid = UUID.randomUUID().toString();
+         final byte[] leaseVersion = uuid.getBytes();
          ipcSem.setNodeData(leaseVersion);
          lease = ipcSem.acquire(0, TimeUnit.NANOSECONDS);
          if (lease == null) {
@@ -132,6 +172,7 @@ final class CuratorDistributedLock implements DistributedLock, ConnectionStateLi
          }
          this.leaseVersion = leaseVersion;
          assert Arrays.equals(lease.getData(), leaseVersion);
+         LOGGER.debugf("%s lock has been acquired by %s with data = %s", lockId, lease.getNodeName(), uuid);
          return true;
       } catch (Throwable e) {
          throw new UnavailableStateException(e);
@@ -146,10 +187,12 @@ final class CuratorDistributedLock implements DistributedLock, ConnectionStateLi
       }
       final Lease lease = this.lease;
       if (lease != null) {
+         final String holder = lease.getNodeName();
          this.lease = null;
          this.leaseVersion = null;
          try {
             ipcSem.returnLease(lease);
+            LOGGER.debugf("%s lock has been released by %s", lockId, holder);
          } catch (Throwable e) {
             throw new UnavailableStateException(e);
          }

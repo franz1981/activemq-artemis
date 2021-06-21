@@ -17,12 +17,15 @@
 package org.apache.activemq.artemis.quorum;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
 public interface DistributedLock extends AutoCloseable {
 
    String getLockId();
+
+   Optional<String> version() throws UnavailableStateException;
 
    boolean isHeldByCaller() throws UnavailableStateException;
 

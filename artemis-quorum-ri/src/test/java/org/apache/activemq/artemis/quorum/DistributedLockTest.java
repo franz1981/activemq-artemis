@@ -102,15 +102,37 @@ public abstract class DistributedLockTest {
    }
 
    @Test
+   public void canAcquireReleasedLock() throws ExecutionException, InterruptedException, TimeoutException, UnavailableStateException {
+      DistributedPrimitiveManager manager = createManagedDistributeManager();
+      manager.start();
+      DistributedPrimitiveManager otherManager = createManagedDistributeManager();
+      otherManager.start();
+      Assert.assertFalse(manager.getDistributedLock("a").version().isPresent());
+      Assert.assertTrue(manager.getDistributedLock("a").tryLock());
+      final String version = otherManager.getDistributedLock("a").version().get();
+      Assert.assertNotNull(version);
+      Assert.assertFalse(otherManager.getDistributedLock("a").tryLock());
+      manager.getDistributedLock("a").unlock();
+      Assert.assertFalse(otherManager.getDistributedLock("a").version().isPresent());
+      Assert.assertTrue(otherManager.getDistributedLock("a").tryLock());
+      final String newVersion = otherManager.getDistributedLock("a").version().get();
+      Assert.assertNotEquals(version, newVersion);
+   }
+
+   @Test
    public void acquireAndReleaseLock() throws ExecutionException, InterruptedException, TimeoutException, UnavailableStateException {
       DistributedPrimitiveManager manager = createManagedDistributeManager();
       manager.start();
       DistributedLock lock = manager.getDistributedLock("a");
       Assert.assertFalse(lock.isHeldByCaller());
       Assert.assertTrue(lock.tryLock());
+      String version = lock.version().get();
+      Assert.assertNotNull(version);
       Assert.assertTrue(lock.isHeldByCaller());
       lock.unlock();
       Assert.assertFalse(lock.isHeldByCaller());
+      Assert.assertTrue(lock.tryLock());
+      Assert.assertNotEquals(version, lock.version().get());
    }
 
    @Test(expected = IllegalStateException.class)
